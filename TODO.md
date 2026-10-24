@@ -202,15 +202,15 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] Scoped API keys / RBAC; admin credential separate from API key — scoped API keys and a separate admin credential are done; per-user roles (RBAC) are still open
 - [x] Complete OIDC discovery metadata; serve `/.well-known/oauth-authorization-server` (RFC 8414) — discovery now advertises S256, response modes, auth methods and the request-parameter flags; RFC 8414 is served (`api/discovery_test.go`)
 - [ ] `private_key_jwt` client auth, DPoP (RFC 9449), JAR (RFC 9101), RFC 9068 `at+jwt`, RFC 9207 `iss` param
-- [ ] OID4VCI: `dc+sd-jwt` format, authorization_code flow, deferred issuance, enforce `tx_code`
+- [ ] OID4VCI: `dc+sd-jwt` format, authorization_code flow, deferred issuance, enforce `tx_code` — the PIN (`tx_code`) is now enforced; the other sub-items are still open
 - [ ] OID4VP: signed request objects, `client_id_scheme`, DCQL, `direct_post.jwt`
-- [ ] Email delivery interface (SMTP) for magic link / password reset / recovery
+- [ ] Email delivery interface (SMTP) for magic link / password reset / recovery — magic-link and password-reset delivery over SMTP is done (`internal/mail`); guardian-recovery notifications are still open
 - [ ] Token status list for SD-JWT VC; suspend purpose
 
 ### 13.6 Test coverage
 - [ ] Tests for `internal/authn`, `internal/bridge` (+providers), `internal/events`, `internal/store`, `internal/auditlog`, `internal/resolver` — lockout, OIDC RP, netguard client IP done; the rest open
 - [x] Tests for `pkg/recovery`, `pkg/keystore`, `pkg/pe`, `pkg/marketplace` and `cmd/` (config validate, version)
-- [ ] Regression test per security fix (forged `X-Subject-DID` → 401; empty `api_key` → startup fails; magic-link response has no token)
+- [ ] Regression test per security fix (forged `X-Subject-DID` → 401; empty `api_key` → startup fails; magic-link response has no token) — the named cases exist: forged X-Subject-DID, empty api_key, magic-link without a token. Other fixes still lack a regression test
 - [x] `go test -race ./...` in CI
 
 ### 13.7 Adoption & developer experience
