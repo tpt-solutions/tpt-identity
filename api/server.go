@@ -272,6 +272,10 @@ func NewServer(cfg Config) *Server {
 	if s.oidc != nil {
 		s.oidc.SetTrustedProxies(trustedNets)
 	}
+	// OID4VP presentations are verified against the same resolver.
+	if s.resolver != nil {
+		s.oid4vp.SetResolver(s.resolver)
+	}
 	// OID4VCI key proofs are checked against the holder DID's published keys.
 	if s.oidc != nil && s.resolver != nil {
 		s.oidc.SetHolderKeyResolver(holderKeyResolver(s.resolver))
