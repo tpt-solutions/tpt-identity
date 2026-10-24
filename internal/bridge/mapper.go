@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/tpt-solutions/tpt-identity/internal/store"
@@ -23,6 +24,24 @@ type BootstrapFunc func(ctx context.Context, subjectDID string, ext *ExternalIde
 type Mapper struct {
 	store     store.Store
 	bootstrap BootstrapFunc // optional; called on new identity creation
+	// externalLocks serialises first-login creation per external identity, so two concurrent
+	// callbacks for the same account cannot both create a platform DID. It covers one process;
+	// replicas need a unique constraint on the external link.
+	externalLocks sync.Map // externalKey → *sync.Mutex
+}
+
+// externalKey identifies an external account for locking.
+type externalKey struct {
+	provider   string
+	externalID string
+}
+
+// lockExternal takes the per-account lock and returns its release function.
+func (m *Mapper) lockExternal(provider, externalID string) func() {
+	v, _ := m.externalLocks.LoadOrStore(externalKey{provider, externalID}, &sync.Mutex{})
+	mu := v.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
 }
 
 // NewMapper creates a Mapper backed by the given store.
@@ -39,6 +58,9 @@ func (m *Mapper) SetBootstrap(fn BootstrapFunc) {
 // If none exists, a new did:key identity is created and persisted.
 // Returns the subjectDID and whether the identity was newly created.
 func (m *Mapper) FindOrCreate(ctx context.Context, ext *ExternalIdentity) (subjectDID string, isNew bool, err error) {
+	unlock := m.lockExternal(ext.Provider, ext.ExternalID)
+	defer unlock()
+
 	link, err := m.store.GetExternalLink(ctx, ext.Provider, ext.ExternalID)
 	if err == nil {
 		// Found — update last used and return.
