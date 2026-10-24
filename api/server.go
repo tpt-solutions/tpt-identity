@@ -41,6 +41,7 @@ type Server struct {
 	magicLinks     MagicLinkSender
 	passwordResets PasswordResetSender
 	recoveries     *recoveryCollector
+	presentations  *presentationRequests
 	bridgeKey      []byte // HMAC key for bridge state tokens (independent of api_key)
 	limiter        *ipRateLimiter
 	// Platform signing key — used for issuing VCs and SD-JWT credentials.
@@ -176,6 +177,7 @@ func NewServer(cfg Config) *Server {
 		magicLinks:         cfg.MagicLinkSender,
 		passwordResets:     cfg.PasswordResetSender,
 		recoveries:         newRecoveryCollector(),
+		presentations:      newPresentationRequests(),
 		bridgeKey:          bridgeKey,
 		limiter:            newIPRateLimiter(rateLimit, int(rateLimit*2)),
 		bridges:            bridges,
