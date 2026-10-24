@@ -322,6 +322,8 @@ func (s *SQLiteStore) migrate() error {
 	_, _ = s.db.Exec(`ALTER TABLE totp_credentials ADD COLUMN verified_at DATETIME`)
 	_, _ = s.db.Exec(`ALTER TABLE totp_credentials ADD COLUMN last_step INTEGER NOT NULL DEFAULT 0`)
 	_, _ = s.db.Exec(`ALTER TABLE consent_grants ADD COLUMN revoked_at DATETIME`)
+	// SHA-256 of the offer PIN (tx_code). Offers from before this column have no hash and are refused.
+	_, _ = s.db.Exec(`ALTER TABLE credential_offers ADD COLUMN tx_code_hash TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -1636,22 +1638,22 @@ func (s *SQLiteStore) CountDisclosures(ctx context.Context, subjectDID, schemaID
 func (s *SQLiteStore) SaveCredentialOffer(ctx context.Context, offer *CredentialOffer) error {
 	schemas, _ := json.Marshal(offer.SchemaIDs)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO credential_offers (id, client_id, schema_ids, issuer_did, subject_did, expires_at, used, created_at)
-		VALUES (?,?,?,?,?,?,?,?)`,
+		INSERT INTO credential_offers (id, client_id, schema_ids, issuer_did, subject_did, expires_at, used, created_at, tx_code_hash)
+		VALUES (?,?,?,?,?,?,?,?,?)`,
 		offer.ID, offer.ClientID, string(schemas), offer.IssuerDID, offer.SubjectDID,
-		offer.ExpiresAt, boolToInt(offer.Used), offer.CreatedAt)
+		offer.ExpiresAt, boolToInt(offer.Used), offer.CreatedAt, offer.TxCodeHash)
 	return err
 }
 
 func (s *SQLiteStore) GetCredentialOffer(ctx context.Context, id string) (*CredentialOffer, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, client_id, schema_ids, issuer_did, subject_did, expires_at, used, created_at
+		`SELECT id, client_id, schema_ids, issuer_did, subject_did, expires_at, used, created_at, tx_code_hash
 		 FROM credential_offers WHERE id=?`, id)
 	var o CredentialOffer
 	var schemas string
 	var used int
 	var clientID, subjectDID sql.NullString
-	if err := row.Scan(&o.ID, &clientID, &schemas, &o.IssuerDID, &subjectDID, &o.ExpiresAt, &used, &o.CreatedAt); err != nil {
+	if err := row.Scan(&o.ID, &clientID, &schemas, &o.IssuerDID, &subjectDID, &o.ExpiresAt, &used, &o.CreatedAt, &o.TxCodeHash); err != nil {
 		return nil, fmt.Errorf("get credential offer: %w", err)
 	}
 	o.ClientID = clientID.String
@@ -1661,7 +1663,15 @@ func (s *SQLiteStore) GetCredentialOffer(ctx context.Context, id string) (*Crede
 	return &o, nil
 }
 
+// MarkCredentialOfferUsed claims an offer. The update applies only while the offer is unused, so two
+// redemptions cannot both succeed; the loser gets ErrOfferUsed.
 func (s *SQLiteStore) MarkCredentialOfferUsed(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `UPDATE credential_offers SET used=1 WHERE id=?`, id)
-	return err
+	res, err := s.db.ExecContext(ctx, `UPDATE credential_offers SET used=1 WHERE id=? AND used=0`, id)
+	if err != nil {
+		return err
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return ErrOfferUsed
+	}
+	return nil
 }

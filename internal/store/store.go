@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"github.com/tpt-solutions/tpt-identity/pkg/consent"
@@ -383,4 +384,9 @@ type CredentialOffer struct {
 	ExpiresAt  time.Time `json:"expires_at"`
 	Used       bool      `json:"used"`
 	CreatedAt  time.Time `json:"created_at"`
+	// TxCodeHash is the hex SHA-256 of the PIN the holder must present. The PIN itself is never stored.
+	TxCodeHash string `json:"-"`
 }
+
+// ErrOfferUsed means a credential offer has already been redeemed or burned.
+var ErrOfferUsed = errors.New("credential offer already used")
