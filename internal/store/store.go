@@ -31,6 +31,20 @@ type Store interface {
 	ListCredentials(ctx context.Context, subjectDID string) ([]*vc.VerifiableCredential, error)
 	DeleteCredential(ctx context.Context, id string) error
 
+	// PutCredential inserts a credential or replaces the stored copy with the same id. It is used
+	// to republish a status list VC after a revocation.
+	PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error
+
+	// --- Status lists (revocation) ---
+	CreateStatusList(ctx context.Context, rec *StatusListRecord) error
+	GetStatusList(ctx context.Context, id string) (*StatusListRecord, error)
+	// ActiveStatusList returns the newest list of an issuer that still has free indices.
+	ActiveStatusList(ctx context.Context, issuerDID string) (*StatusListRecord, error)
+	// AllocateStatusIndex reserves the next free index in a list. It returns ErrStatusListFull when none is left.
+	AllocateStatusIndex(ctx context.Context, listID string) (int, error)
+	// SetStatusBit marks an index revoked and returns the updated list.
+	SetStatusBit(ctx context.Context, listID string, index int) (*StatusListRecord, error)
+
 	// --- Consent Grants ---
 	SaveGrant(ctx context.Context, g *consent.Grant) error
 	GetGrant(ctx context.Context, id string) (*consent.Grant, error)
@@ -390,3 +404,19 @@ type CredentialOffer struct {
 
 // ErrOfferUsed means a credential offer has already been redeemed or burned.
 var ErrOfferUsed = errors.New("credential offer already used")
+
+// ErrNotFound means the requested record does not exist.
+var ErrNotFound = errors.New("not found")
+
+// ErrStatusListFull means a status list has no free index left.
+var ErrStatusListFull = errors.New("status list is full")
+
+// StatusListRecord is a persisted BitstringStatusList: the bits, and how many indices are assigned.
+type StatusListRecord struct {
+	ID        string // the public URL of the list credential
+	IssuerDID string
+	SizeBits  int    // total entries (a multiple of 8, at least the W3C minimum)
+	NextIndex int    // the next index to hand to a credential
+	Bits      []byte // raw bitstring: bit i set means index i is revoked
+	UpdatedAt time.Time
+}

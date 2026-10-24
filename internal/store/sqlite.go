@@ -324,6 +324,9 @@ func (s *SQLiteStore) migrate() error {
 	_, _ = s.db.Exec(`ALTER TABLE consent_grants ADD COLUMN revoked_at DATETIME`)
 	// SHA-256 of the offer PIN (tx_code). Offers from before this column have no hash and are refused.
 	_, _ = s.db.Exec(`ALTER TABLE credential_offers ADD COLUMN tx_code_hash TEXT NOT NULL DEFAULT ''`)
+	if err := s.migrateStatusLists(); err != nil {
+		return err
+	}
 	return nil
 }
 
