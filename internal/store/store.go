@@ -56,6 +56,14 @@ type Store interface {
 	SaveRefreshToken(ctx context.Context, t *RefreshToken) error
 	GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error)
 	DeleteRefreshToken(ctx context.Context, hash string) error
+	// MarkRefreshTokenUsed atomically sets used_at. It returns false if the token was
+	// already used, so exactly one concurrent refresh can win.
+	MarkRefreshTokenUsed(ctx context.Context, hash string, at time.Time) (bool, error)
+	// DeleteRefreshTokenFamily removes every refresh token issued in one rotation chain.
+	DeleteRefreshTokenFamily(ctx context.Context, familyID string) error
+	// TakeSessionByCode atomically fetches and deletes the session holding an
+	// authorization code, so a code can be redeemed only once.
+	TakeSessionByCode(ctx context.Context, code string) (*OIDCSession, error)
 
 	// --- External Provider Links (Identity Bridge) ---
 	SaveExternalLink(ctx context.Context, l *ExternalProviderLink) error
@@ -131,10 +139,19 @@ type Store interface {
 	UpdateDeviceCode(ctx context.Context, dc *DeviceCode) error
 	DeleteDeviceCode(ctx context.Context, deviceCode string) error
 
+	// --- Revoked Access Tokens (RFC 7009) ---
+	// RevokeAccessToken records hash (sha256 hex of the token) until expiresAt.
+	RevokeAccessToken(ctx context.Context, hash string, expiresAt time.Time) error
+	// IsAccessTokenRevoked reports whether hash is on the revocation list.
+	IsAccessTokenRevoked(ctx context.Context, hash string) (bool, error)
+
 	// --- Password Reset Tokens ---
 	SavePasswordResetToken(ctx context.Context, t *PasswordResetToken) error
 	GetPasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error)
 	DeletePasswordResetToken(ctx context.Context, hash string) error
+	// ConsumePasswordResetToken atomically fetches and deletes the token, so a reset
+	// token can be used once even under concurrent requests. It returns sql.ErrNoRows if absent.
+	ConsumePasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error)
 
 	// --- Privacy Budget ---
 	RecordDisclosure(ctx context.Context, d *PrivacyDisclosure) error
@@ -205,6 +222,7 @@ type OIDCClient struct {
 // RefreshToken stores a hashed refresh token for rotation.
 type RefreshToken struct {
 	Hash       string     `json:"hash"`      // sha256(raw_token)
+	FamilyID   string     `json:"familyId"`  // shared by every token in one rotation chain
 	SubjectDID string     `json:"subjectDid"`
 	ClientID   string     `json:"clientId"`
 	Scope      string     `json:"scope"`
@@ -257,7 +275,9 @@ type WebhookSubscription struct {
 	ID         string    `json:"id"`
 	URL        string    `json:"url"`
 	EventTypes []string  `json:"eventTypes"` // e.g. ["credential.issued", "consent.granted"]
-	SecretHash string    `json:"-"`          // sha256(signing_secret) — used to HMAC delivery payloads
+	// SigningSecret is the raw HMAC key for delivery payloads. The receiver holds the same
+	// value, so it must be stored and cannot be hashed. Never serialised to API callers.
+	SigningSecret string `json:"-"`
 	TenantID   string    `json:"tenantId,omitempty"`
 	CreatedAt  time.Time `json:"createdAt"`
 }
@@ -282,11 +302,14 @@ type RecoveryConfig struct {
 
 // RecoveryRequest is an in-progress recovery initiated by a subject.
 type RecoveryRequest struct {
-	ID             string    `json:"id"`
-	SubjectDID     string    `json:"subject_did"`
-	StartedAt      time.Time `json:"started_at"`
-	SharesCollected int      `json:"shares_collected"`
-	Completed      bool      `json:"completed"`
+	ID              string    `json:"id"`
+	SubjectDID      string    `json:"subject_did"`
+	StartedAt       time.Time `json:"started_at"`
+	SharesCollected int       `json:"shares_collected"`
+	Completed       bool      `json:"completed"`
+	// Commitment is hex(sha256(recovery token)). Completion requires the shares to
+	// recombine to a token matching it. Never serialised to API callers.
+	Commitment string `json:"-"`
 }
 
 // RecoveryShare is a single guardian's contribution to a recovery request.

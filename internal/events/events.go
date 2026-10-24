@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/PhillipC05/tpt-identity/internal/netguard"
 	"github.com/PhillipC05/tpt-identity/internal/store"
 )
 
@@ -57,8 +58,24 @@ func NewBus(st store.Store, logger *slog.Logger) *Bus {
 	return &Bus{
 		st:     st,
 		logger: logger,
-		client: &http.Client{Timeout: 10 * time.Second},
+		// Connects only to public addresses and never follows redirects.
+		client: netguard.Client(10 * time.Second),
 	}
+}
+
+// Ping sends a test event to a single subscription. Other subscribers do not receive it.
+func (b *Bus) Ping(sub *store.WebhookSubscription) {
+	body, err := json.Marshal(Event{
+		ID:        randomEventID(),
+		Type:      "webhook.ping",
+		OccuredAt: time.Now().UTC().Format(time.RFC3339),
+		Payload:   map[string]any{"webhook_id": sub.ID, "message": "Test delivery from tpt-identity."},
+	})
+	if err != nil {
+		b.logger.Error("events: marshal ping", "err", err)
+		return
+	}
+	go b.deliver(sub, body)
 }
 
 // Subscribe registers an in-process subscriber called on every Publish.
@@ -103,7 +120,12 @@ func (b *Bus) Publish(ctx context.Context, eventType string, payload any) {
 
 // deliver attempts webhook delivery with up to 3 retries and exponential backoff.
 func (b *Bus) deliver(sub *store.WebhookSubscription, body []byte) {
-	sig := computeHMAC(body, sub.SecretHash)
+	if sub.SigningSecret == "" {
+		// Subscriptions created before signing secrets were stored cannot be signed; skip them.
+		b.logger.Warn("events: subscription has no signing secret; re-register it", "subscription", sub.ID)
+		return
+	}
+	sig := computeHMAC(body, sub.SigningSecret)
 	backoff := 2 * time.Second
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
@@ -139,10 +161,10 @@ func (b *Bus) deliver(sub *store.WebhookSubscription, body []byte) {
 	}
 }
 
-func computeHMAC(body []byte, secretHash string) string {
-	// secretHash is sha256(raw_secret) — we use it directly as the HMAC key.
-	// In production, store the raw secret encrypted; here we use the hash as a proxy.
-	h := hmac.New(sha256.New, []byte(secretHash))
+// computeHMAC signs body with the subscription's raw signing secret, which the receiver
+// also holds. Receivers verify X-TPT-Signature-256 with the same secret.
+func computeHMAC(body []byte, secret string) string {
+	h := hmac.New(sha256.New, []byte(secret))
 	h.Write(body)
 	return hex.EncodeToString(h.Sum(nil))
 }

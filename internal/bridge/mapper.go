@@ -103,6 +103,18 @@ func (m *Mapper) UnlinkIdentity(ctx context.Context, subjectDID, provider, exter
 	if err != nil {
 		return fmt.Errorf("bridge: list links: %w", err)
 	}
+	// The link must belong to subjectDID. Without this check, a caller could remove
+	// another account's link by naming its provider and external ID.
+	owned := false
+	for _, l := range links {
+		if l.Provider == provider && l.ExternalID == externalID {
+			owned = true
+			break
+		}
+	}
+	if !owned {
+		return errors.New("bridge: link not found for this identity")
+	}
 	if len(links) <= 1 {
 		return errors.New("bridge: cannot unlink last auth method")
 	}

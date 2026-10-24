@@ -136,6 +136,7 @@ func (s *SQLiteStore) migrate() error {
 
 	CREATE TABLE IF NOT EXISTS refresh_tokens (
 		hash TEXT PRIMARY KEY,
+		family_id TEXT NOT NULL DEFAULT '',
 		subject_did TEXT NOT NULL,
 		client_id TEXT NOT NULL,
 		scope TEXT,
@@ -188,6 +189,7 @@ func (s *SQLiteStore) migrate() error {
 		url TEXT NOT NULL,
 		event_types JSON NOT NULL,
 		secret_hash TEXT,
+		signing_secret TEXT NOT NULL DEFAULT '',
 		tenant_id TEXT,
 		created_at DATETIME NOT NULL
 	);
@@ -241,6 +243,11 @@ func (s *SQLiteStore) migrate() error {
 		share_hash   TEXT NOT NULL,
 		collected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 		PRIMARY KEY (request_id, guardian_did)
+	);
+
+	CREATE TABLE IF NOT EXISTS revoked_access_tokens (
+		hash       TEXT PRIMARY KEY,
+		expires_at DATETIME NOT NULL
 	);
 
 	-- Pushed Authorization Requests (RFC 9126)
@@ -305,6 +312,9 @@ func (s *SQLiteStore) migrate() error {
 	// Idempotent column additions — errors are ignored.
 	_, _ = s.db.Exec(`ALTER TABLE oidc_clients ADD COLUMN backchannel_logout_uri TEXT`)
 	_, _ = s.db.Exec(`ALTER TABLE oidc_clients ADD COLUMN post_logout_redirect_uris JSON`)
+	_, _ = s.db.Exec(`ALTER TABLE recovery_requests ADD COLUMN commitment TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE refresh_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE webhook_subscriptions ADD COLUMN signing_secret TEXT NOT NULL DEFAULT ''`)
 	return nil
 }
 
@@ -684,18 +694,18 @@ func (s *SQLiteStore) scanClientRow(rows *sql.Rows) (*OIDCClient, error) {
 
 func (s *SQLiteStore) SaveRefreshToken(ctx context.Context, t *RefreshToken) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO refresh_tokens (hash, subject_did, client_id, scope, issued_at, expires_at, used_at)
-		VALUES (?,?,?,?,?,?,?)
+		INSERT INTO refresh_tokens (hash, family_id, subject_did, client_id, scope, issued_at, expires_at, used_at)
+		VALUES (?,?,?,?,?,?,?,?)
 		ON CONFLICT(hash) DO UPDATE SET used_at=excluded.used_at`,
-		t.Hash, t.SubjectDID, t.ClientID, t.Scope, t.IssuedAt, t.ExpiresAt, t.UsedAt)
+		t.Hash, t.FamilyID, t.SubjectDID, t.ClientID, t.Scope, t.IssuedAt, t.ExpiresAt, t.UsedAt)
 	return err
 }
 
 func (s *SQLiteStore) GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT hash, subject_did, client_id, scope, issued_at, expires_at, used_at FROM refresh_tokens WHERE hash=?`, hash)
+	row := s.db.QueryRowContext(ctx, `SELECT hash, family_id, subject_did, client_id, scope, issued_at, expires_at, used_at FROM refresh_tokens WHERE hash=?`, hash)
 	var t RefreshToken
 	var usedAt sql.NullTime
-	if err := row.Scan(&t.Hash, &t.SubjectDID, &t.ClientID, &t.Scope, &t.IssuedAt, &t.ExpiresAt, &usedAt); err != nil {
+	if err := row.Scan(&t.Hash, &t.FamilyID, &t.SubjectDID, &t.ClientID, &t.Scope, &t.IssuedAt, &t.ExpiresAt, &usedAt); err != nil {
 		return nil, fmt.Errorf("get refresh token: %w", err)
 	}
 	if usedAt.Valid {
@@ -707,6 +717,50 @@ func (s *SQLiteStore) GetRefreshToken(ctx context.Context, hash string) (*Refres
 func (s *SQLiteStore) DeleteRefreshToken(ctx context.Context, hash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE hash=?`, hash)
 	return err
+}
+
+func (s *SQLiteStore) MarkRefreshTokenUsed(ctx context.Context, hash string, at time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE refresh_tokens SET used_at=? WHERE hash=? AND used_at IS NULL`, at.UTC(), hash)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, err
+	}
+	return n == 1, nil
+}
+
+func (s *SQLiteStore) DeleteRefreshTokenFamily(ctx context.Context, familyID string) error {
+	if familyID == "" {
+		return nil
+	}
+	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE family_id=?`, familyID)
+	return err
+}
+
+func (s *SQLiteStore) TakeSessionByCode(ctx context.Context, code string) (*OIDCSession, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	sess, err := s.scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionCols+` FROM oidc_sessions WHERE code=?`, code))
+	if err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM oidc_sessions WHERE id=? AND code=?`, sess.ID, code)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return nil, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return sess, nil
 }
 
 // --- External Provider Links ---
@@ -885,20 +939,20 @@ func (s *SQLiteStore) DeleteTOTPCredential(ctx context.Context, subjectDID strin
 func (s *SQLiteStore) SaveWebhookSubscription(ctx context.Context, sub *WebhookSubscription) error {
 	eventTypes, _ := json.Marshal(sub.EventTypes)
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO webhook_subscriptions (id, url, event_types, secret_hash, tenant_id, created_at)
+		INSERT INTO webhook_subscriptions (id, url, event_types, signing_secret, tenant_id, created_at)
 		VALUES (?,?,?,?,?,?)
 		ON CONFLICT(id) DO UPDATE SET url=excluded.url, event_types=excluded.event_types`,
-		sub.ID, sub.URL, string(eventTypes), sub.SecretHash, sub.TenantID, sub.CreatedAt)
+		sub.ID, sub.URL, string(eventTypes), sub.SigningSecret, sub.TenantID, sub.CreatedAt)
 	return err
 }
 
 func (s *SQLiteStore) GetWebhookSubscription(ctx context.Context, id string) (*WebhookSubscription, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, url, event_types, secret_hash, tenant_id, created_at FROM webhook_subscriptions WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, url, event_types, signing_secret, tenant_id, created_at FROM webhook_subscriptions WHERE id=?`, id)
 	return s.scanWebhookSub(row)
 }
 
 func (s *SQLiteStore) ListWebhookSubscriptions(ctx context.Context, eventType string) ([]*WebhookSubscription, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, url, event_types, secret_hash, tenant_id, created_at FROM webhook_subscriptions`)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, url, event_types, signing_secret, tenant_id, created_at FROM webhook_subscriptions`)
 	if err != nil {
 		return nil, err
 	}
@@ -933,7 +987,7 @@ func (s *SQLiteStore) DeleteWebhookSubscription(ctx context.Context, id string) 
 func (s *SQLiteStore) scanWebhookSub(row *sql.Row) (*WebhookSubscription, error) {
 	var sub WebhookSubscription
 	var eventTypes string
-	if err := row.Scan(&sub.ID, &sub.URL, &eventTypes, &sub.SecretHash, &sub.TenantID, &sub.CreatedAt); err != nil {
+	if err := row.Scan(&sub.ID, &sub.URL, &eventTypes, &sub.SigningSecret, &sub.TenantID, &sub.CreatedAt); err != nil {
 		return nil, fmt.Errorf("scan webhook subscription: %w", err)
 	}
 	if err := unmarshalField(eventTypes, &sub.EventTypes); err != nil {
@@ -945,7 +999,7 @@ func (s *SQLiteStore) scanWebhookSub(row *sql.Row) (*WebhookSubscription, error)
 func (s *SQLiteStore) scanWebhookSubRow(rows *sql.Rows) (*WebhookSubscription, error) {
 	var sub WebhookSubscription
 	var eventTypes string
-	if err := rows.Scan(&sub.ID, &sub.URL, &eventTypes, &sub.SecretHash, &sub.TenantID, &sub.CreatedAt); err != nil {
+	if err := rows.Scan(&sub.ID, &sub.URL, &eventTypes, &sub.SigningSecret, &sub.TenantID, &sub.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := unmarshalField(eventTypes, &sub.EventTypes); err != nil {
@@ -1163,17 +1217,17 @@ func (s *SQLiteStore) DeleteRecoveryConfig(ctx context.Context, subjectDID strin
 
 func (s *SQLiteStore) SaveRecoveryRequest(ctx context.Context, req *RecoveryRequest) error {
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO recovery_requests (id, subject_did, shares_collected, completed) VALUES (?,?,?,?)`,
-		req.ID, req.SubjectDID, req.SharesCollected, boolToInt(req.Completed))
+		`INSERT INTO recovery_requests (id, subject_did, shares_collected, completed, commitment) VALUES (?,?,?,?,?)`,
+		req.ID, req.SubjectDID, req.SharesCollected, boolToInt(req.Completed), req.Commitment)
 	return err
 }
 
 func (s *SQLiteStore) GetRecoveryRequest(ctx context.Context, id string) (*RecoveryRequest, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT id, subject_did, started_at, shares_collected, completed FROM recovery_requests WHERE id=?`, id)
+		`SELECT id, subject_did, started_at, shares_collected, completed, commitment FROM recovery_requests WHERE id=?`, id)
 	var req RecoveryRequest
 	var completed int
-	if err := row.Scan(&req.ID, &req.SubjectDID, &req.StartedAt, &req.SharesCollected, &completed); err != nil {
+	if err := row.Scan(&req.ID, &req.SubjectDID, &req.StartedAt, &req.SharesCollected, &completed, &req.Commitment); err != nil {
 		return nil, err
 	}
 	req.Completed = completed != 0
@@ -1320,6 +1374,24 @@ func (s *SQLiteStore) UpdateDeviceCode(ctx context.Context, dc *DeviceCode) erro
 	return err
 }
 
+func (s *SQLiteStore) RevokeAccessToken(ctx context.Context, hash string, expiresAt time.Time) error {
+	// Entries past their expiry can never match a valid token; drop them as we go.
+	_, _ = s.db.ExecContext(ctx, `DELETE FROM revoked_access_tokens WHERE expires_at < ?`, time.Now().UTC())
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO revoked_access_tokens (hash, expires_at) VALUES (?,?)
+		 ON CONFLICT(hash) DO UPDATE SET expires_at=excluded.expires_at`,
+		hash, expiresAt.UTC())
+	return err
+}
+
+func (s *SQLiteStore) IsAccessTokenRevoked(ctx context.Context, hash string) (bool, error) {
+	var n int
+	err := s.db.QueryRowContext(ctx,
+		`SELECT COUNT(1) FROM revoked_access_tokens WHERE hash=? AND expires_at > ?`,
+		hash, time.Now().UTC()).Scan(&n)
+	return n > 0, err
+}
+
 func (s *SQLiteStore) DeleteDeviceCode(ctx context.Context, deviceCode string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM device_codes WHERE device_code=?`, deviceCode)
 	return err
@@ -1361,6 +1433,33 @@ func (s *SQLiteStore) GetPasswordResetToken(ctx context.Context, hash string) (*
 func (s *SQLiteStore) DeletePasswordResetToken(ctx context.Context, hash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE hash=?`, hash)
 	return err
+}
+
+func (s *SQLiteStore) ConsumePasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+
+	var t PasswordResetToken
+	err = tx.QueryRowContext(ctx,
+		`SELECT hash, identifier, expires_at, created_at FROM password_reset_tokens WHERE hash=?`, hash,
+	).Scan(&t.Hash, &t.Identifier, &t.ExpiresAt, &t.CreatedAt)
+	if err != nil {
+		return nil, err
+	}
+	res, err := tx.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE hash=?`, hash)
+	if err != nil {
+		return nil, err
+	}
+	if n, _ := res.RowsAffected(); n != 1 {
+		return nil, sql.ErrNoRows
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return &t, nil
 }
 
 // --- Privacy Budget ---
