@@ -85,13 +85,19 @@ func serveCmd() *cobra.Command {
 			}
 
 			issuer := viper.GetString("issuer")
+			// Key IDs are fragments of the platform did:web, so verifiers can resolve them
+			// from /.well-known/did.json.
+			platformDID, err := api.PlatformDID(issuer)
+			if err != nil {
+				return fmt.Errorf("issuer: %w", err)
+			}
 			keyID := viper.GetString("identity.key_id")
 			if keyID == "" {
-				keyID = issuer + "#signing-key-1"
+				keyID = platformDID + "#signing-key-1"
 			}
 			encKeyID := viper.GetString("identity.enc_key_id")
 			if encKeyID == "" && ks.HasEnc {
-				encKeyID = issuer + "#enc-key-1"
+				encKeyID = platformDID + "#enc-key-1"
 			}
 
 			res := resolver.New(5 * time.Minute)

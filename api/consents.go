@@ -10,10 +10,12 @@ import (
 	"github.com/PhillipC05/tpt-identity/pkg/schema"
 )
 
+// handleListGrants lists the caller's own consent grants (including revoked ones, for the audit trail).
+// GET /api/v1/consents/grants
 func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
-	subjectDID := r.URL.Query().Get("subject")
-	if subjectDID == "" {
-		http.Error(w, "subject query parameter required", http.StatusBadRequest)
+	subjectDID, err := s.oidc.SubjectFromBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized", "authenticated session required")
 		return
 	}
 	grants, err := s.store.ListGrants(r.Context(), subjectDID)
@@ -25,26 +27,48 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(grants)
 }
 
+// handleCreateGrant records consent from the signed-in subject. The subject comes from the
+// token and the ID is generated here; the body supplies only the scope and relying party.
+// POST /api/v1/consents/grants
 func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
-	var g consent.Grant
-	if err := json.NewDecoder(r.Body).Decode(&g); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+	subjectDID, err := s.oidc.SubjectFromBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized", "authenticated session required")
 		return
 	}
-	// Enforce: category grants and extra-sensitive schemas always require explicit confirmation.
-	if g.Level == consent.GrantCategory && !g.ExplicitlyConfirmed {
-		http.Error(w, "category grants require explicitlyConfirmed=true — the user must explicitly approve sharing all schemas in this category", http.StatusBadRequest)
+	var body struct {
+		RelyingDID          string             `json:"relyingDid"`
+		Level               consent.GrantLevel `json:"level"`
+		ScopeID             string             `json:"scopeId"`
+		ExpiresAt           *time.Time         `json:"expiresAt,omitempty"`
+		ExplicitlyConfirmed bool               `json:"explicitlyConfirmed"`
+	}
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&body); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_request", "invalid JSON body")
 		return
 	}
-	if g.Level == consent.GrantSchema {
-		s, _ := schema.GetSchema(g.ScopeID)
-		if s.ExtraSensitive && !g.ExplicitlyConfirmed {
-			http.Error(w, "this schema is extra-sensitive and requires explicitlyConfirmed=true", http.StatusBadRequest)
-			return
-		}
+	id, err := randomHex(16)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	g := consent.Grant{
+		ID:                  "grant_" + id,
+		SubjectDID:          subjectDID,
+		RelyingDID:          body.RelyingDID,
+		Level:               body.Level,
+		ScopeID:             body.ScopeID,
+		GrantedAt:           time.Now().UTC(),
+		ExpiresAt:           body.ExpiresAt,
+		ExplicitlyConfirmed: body.ExplicitlyConfirmed,
+	}
+	// Category grants, extra-sensitive schemas and unknown scopes are all refused here.
+	if err := consent.ValidateGrant(g); err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_grant", err.Error())
+		return
 	}
 	if err := s.store.SaveGrant(r.Context(), &g); err != nil {
-		http.Error(w, "save grant: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "save grant", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
@@ -52,10 +76,28 @@ func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(g)
 }
 
+// handleRevokeGrant withdraws one of the caller's grants. The record is kept with revoked_at
+// set, not deleted, for the audit trail. A grant that belongs to someone else reads as not found.
+// DELETE /api/v1/consents/grants/{id}
 func (s *Server) handleRevokeGrant(w http.ResponseWriter, r *http.Request) {
+	subjectDID, err := s.oidc.SubjectFromBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		writeJSONError(w, http.StatusUnauthorized, "unauthorized", "authenticated session required")
+		return
+	}
 	id := r.PathValue("id")
-	if err := s.store.DeleteGrant(r.Context(), id); err != nil {
-		http.Error(w, "revoke grant: "+err.Error(), http.StatusInternalServerError)
+	g, err := s.store.GetGrant(r.Context(), id)
+	if err != nil || g.SubjectDID != subjectDID {
+		writeJSONError(w, http.StatusNotFound, "not_found", "grant not found")
+		return
+	}
+	revoked, err := s.store.RevokeGrant(r.Context(), id, time.Now())
+	if err != nil {
+		http.Error(w, "revoke grant", http.StatusInternalServerError)
+		return
+	}
+	if !revoked {
+		writeJSONError(w, http.StatusConflict, "already_revoked", "grant is already revoked")
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)

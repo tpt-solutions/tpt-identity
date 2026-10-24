@@ -64,9 +64,10 @@ func (s *Server) handleIssueSDJWT(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	issuerDID := req.IssuerDID
-	if issuerDID == "" {
-		issuerDID = s.issuer
+	issuerDID, err := s.issuerForRequest(req.IssuerDID)
+	if err != nil {
+		writeJSONError(w, http.StatusBadRequest, "invalid_issuer", err.Error())
+		return
 	}
 
 	var validFor time.Duration

@@ -33,6 +33,9 @@ type Server struct {
 	oidc           *oidc.Provider
 	apiKey         string
 	issuer         string
+	// platformDID is the did:web identifier of this server; it is the issuer of every credential.
+	platformDID    string
+	platformDIDDoc []byte // JSON DID document served at /.well-known/did.json; nil if unavailable
 	totpPassphrase string
 	logger         *slog.Logger
 	magicLinks     MagicLinkSender
@@ -125,6 +128,14 @@ func NewServer(cfg Config) *Server {
 	if eventBus == nil {
 		eventBus = events.NewBus(cfg.Store, logger)
 	}
+	platformDID, platformDIDDoc := "", []byte(nil)
+	if cfg.SigningKey != nil {
+		if id, doc, err := buildPlatformDIDDocument(cfg.Issuer, cfg.SigningKey.Public().(ed25519.PublicKey), cfg.EncKey); err != nil {
+			logger.Warn("platform DID not configured", "error", err)
+		} else {
+			platformDID, platformDIDDoc = id, doc
+		}
+	}
 	bridgeKey := []byte(cfg.BridgeSecret)
 	if len(bridgeKey) == 0 {
 		bridgeKey = make([]byte, 32)
@@ -154,6 +165,8 @@ func NewServer(cfg Config) *Server {
 		oidc:               cfg.OIDC,
 		apiKey:             cfg.APIKey,
 		issuer:             cfg.Issuer,
+		platformDID:        platformDID,
+		platformDIDDoc:     platformDIDDoc,
 		totpPassphrase:     cfg.TotpPassphrase,
 		signingKey:         cfg.SigningKey,
 		signingKeyID:       cfg.SigningKeyID,
@@ -327,9 +340,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/credentials/{id}/fresh", s.wrap(s.rateLimit(s.audit(s.handleCredentialFreshness))))
 	// ZKP — derived age-over proof (issuer-computed, no ZK-SNARK)
 	s.mux.HandleFunc("POST /api/v1/credentials/zkp/age", s.wrap(s.rateLimit(s.audit(s.auth(s.handleIssueAgeProof)))))
-	s.mux.HandleFunc("GET /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListGrants)))))
-	s.mux.HandleFunc("POST /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.auth(s.handleCreateGrant)))))
-	s.mux.HandleFunc("DELETE /api/v1/consents/grants/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleRevokeGrant)))))
+	s.mux.HandleFunc("GET /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleListGrants))))
+	s.mux.HandleFunc("POST /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleCreateGrant))))
+	s.mux.HandleFunc("DELETE /api/v1/consents/grants/{id}", s.wrap(s.rateLimit(s.audit(s.handleRevokeGrant))))
 	s.mux.HandleFunc("GET /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListReceipts)))))
 	s.mux.HandleFunc("POST /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(s.handleSubmitReceipt)))))
 	s.mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleDeleteSession)))))
@@ -498,10 +511,6 @@ func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
 	w.Write([]byte("ok"))
 }
 
-func (s *Server) handleDIDDocument(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/did+json")
-	http.Error(w, "not configured — set local DID in config", http.StatusNotFound)
-}
 
 // --- responseRecorder captures the status code for audit logging ---
 

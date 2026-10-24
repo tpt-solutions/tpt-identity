@@ -1,6 +1,7 @@
 package api
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"time"
@@ -11,25 +12,42 @@ import (
 )
 
 type createIdentityRequest struct {
-	Method     string `json:"method"`     // "web", "key", "peer"
-	Domain     string `json:"domain"`     // required for did:web
-	Passphrase string `json:"passphrase"` // for key encryption
+	Method string `json:"method"` // "web", "key", "peer"
+	Domain string `json:"domain"` // required for did:web
 }
 
+// createIdentityResponse carries the new DID and, once, its private keys. The server does
+// not keep them: whoever creates the identity must store them.
+type createIdentityResponse struct {
+	DID      string        `json:"did"`
+	Document *did.Document `json:"document"`
+	Keys     identityKeys  `json:"private_keys"`
+	Warning  string        `json:"warning"`
+}
+
+type identityKeys struct {
+	// Ed25519Seed is the 32-byte signing seed, base64 (standard encoding).
+	Ed25519Seed string `json:"ed25519_seed"`
+	// X25519Private is the 32-byte key-agreement scalar, base64 (standard encoding).
+	X25519Private string `json:"x25519_private"`
+}
+
+// handleCreateIdentity creates a DID and its document in one transaction. The private
+// keys are returned once in the response. POST /api/v1/identities (operator key required).
 func (s *Server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
 	var req createIdentityRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
+		http.Error(w, "bad request", http.StatusBadRequest)
 		return
 	}
 	ks, err := keystore.Generate()
 	if err != nil {
-		http.Error(w, "keygen failed: "+err.Error(), http.StatusInternalServerError)
+		http.Error(w, "keygen failed", http.StatusInternalServerError)
 		return
 	}
 	id, doc, err := did.Create(req.Method, did.CreateOptions{
 		Domain:     req.Domain,
-		SigningPub:  ks.SigningPub,
+		SigningPub: ks.SigningPub,
 		EncPub:     ks.EncPub[:],
 	})
 	if err != nil {
@@ -43,19 +61,21 @@ func (s *Server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
-	if err := s.store.SaveIdentity(r.Context(), identity); err != nil {
-		http.Error(w, "save identity: "+err.Error(), http.StatusInternalServerError)
+	if err := s.store.CreateIdentityWithDocument(r.Context(), identity, doc); err != nil {
+		http.Error(w, "save identity", http.StatusInternalServerError)
 		return
 	}
-	if err := s.store.SaveDocument(r.Context(), doc); err != nil {
-		http.Error(w, "save document: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{
-		"did":      id,
-		"document": doc,
+	json.NewEncoder(w).Encode(createIdentityResponse{
+		DID:      id,
+		Document: doc,
+		Keys: identityKeys{
+			Ed25519Seed:   base64.StdEncoding.EncodeToString(ks.SigningPriv.Seed()),
+			X25519Private: base64.StdEncoding.EncodeToString(ks.EncPriv[:]),
+		},
+		Warning: "Store the private keys now. They are not kept on the server and are not returned again.",
 	})
 }
 

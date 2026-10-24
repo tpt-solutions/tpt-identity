@@ -563,7 +563,7 @@ func (s *Server) maybeIssueBootstrapVC(ctx context.Context, subjectDID, schemaID
 		}
 	}
 	cred, err := vc.Issue(vc.IssueOptions{
-		IssuerDID:            s.issuer,
+		IssuerDID:            s.platformDID,
 		IssuerKey:            s.signingKey,
 		VerificationMethodID: s.signingKeyID,
 		SubjectDID:           subjectDID,
@@ -583,7 +583,7 @@ func (s *Server) maybeIssueBootstrapVC(ctx context.Context, subjectDID, schemaID
 		"id":         cred.ID,
 		"subject":    subjectDID,
 		"schema_id":  schemaID,
-		"issuer_did": s.issuer,
+		"issuer_did": s.platformDID,
 		"source":     "bootstrap",
 	})
 }

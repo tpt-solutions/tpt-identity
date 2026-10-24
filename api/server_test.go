@@ -249,18 +249,41 @@ func TestWebhookMissingURLRejects(t *testing.T) {
 
 // ---- Consent grants ----
 
-func TestListGrantsMissingSubjectRejects(t *testing.T) {
+// Grants belong to the signed-in subject, so the operator key alone is refused.
+func TestListGrantsRequiresBearer(t *testing.T) {
 	srv := newTestServer(t)
-	// No ?subject query param
 	w := authed(t, srv, http.MethodGet, "/api/v1/consents/grants", "")
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("want 400 without subject param, got %d", w.Code)
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 with operator key only, got %d", w.Code)
 	}
 }
 
 func TestListGrantsEmpty(t *testing.T) {
-	srv := newTestServer(t)
-	w := authed(t, srv, http.MethodGet, "/api/v1/consents/grants?subject=did:peer:nobody", "")
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, priv, _ := crypto.GenerateSigningKey()
+	srv := api.NewServer(api.Config{
+		APIKey:     testAPIKey,
+		Issuer:     testIssuer,
+		SigningKey: priv,
+		Store:      st,
+		OIDC:       oidc.NewProvider(testIssuer, priv, "test-key-1", st),
+		Resolver:   resolver.New(time.Minute),
+	})
+	now := time.Now()
+	if err := st.SaveIdentity(context.Background(), &store.Identity{
+		DID: "did:peer:nobody", Method: "peer", Role: "user", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("save identity: %v", err)
+	}
+	tok, err := oidc.IssueAccessToken(testIssuer, "did:peer:nobody", "client-1", time.Hour, priv, "test-key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := do(t, srv, http.MethodGet, "/api/v1/consents/grants", "", map[string]string{"Authorization": "Bearer " + tok})
 	if w.Code != http.StatusOK {
 		t.Fatalf("want 200, got %d: %s", w.Code, w.Body.String())
 	}

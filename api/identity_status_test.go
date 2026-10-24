@@ -2,6 +2,8 @@ package api_test
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
 	"testing"
 	"time"
@@ -50,5 +52,33 @@ func TestSuspendedIdentityLosesAccess(t *testing.T) {
 	}
 	if w := do(t, srv, http.MethodGet, "/api/v1/me/sessions", "", bearer); w.Code != http.StatusUnauthorized {
 		t.Errorf("after suspension: want 401, got %d", w.Code)
+	}
+}
+
+// Creating an identity returns its private keys once and stores the identity with its document.
+func TestCreateIdentityReturnsKeysAndStores(t *testing.T) {
+	srv := newTestServer(t)
+	w := authed(t, srv, http.MethodPost, "/api/v1/identities", `{"method":"peer"}`)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("create: want 201, got %d: %s", w.Code, w.Body.String())
+	}
+	var out struct {
+		DID  string `json:"did"`
+		Keys struct {
+			Ed25519Seed   string `json:"ed25519_seed"`
+			X25519Private string `json:"x25519_private"`
+		} `json:"private_keys"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for name, v := range map[string]string{"ed25519": out.Keys.Ed25519Seed, "x25519": out.Keys.X25519Private} {
+		b, err := base64.StdEncoding.DecodeString(v)
+		if err != nil || len(b) != 32 {
+			t.Errorf("%s key: want 32 bytes, got %d (%v)", name, len(b), err)
+		}
+	}
+	if w := authed(t, srv, http.MethodGet, "/api/v1/identities/"+out.DID, ""); w.Code != http.StatusOK {
+		t.Errorf("created identity not resolvable: %d", w.Code)
 	}
 }

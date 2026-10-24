@@ -42,9 +42,10 @@ func (s *Server) handleBatchIssueCredentials(w http.ResponseWriter, r *http.Requ
 	results := make([]result, len(requests))
 
 	for i, req := range requests {
-		issuerDID := req.IssuerDID
-		if issuerDID == "" {
-			issuerDID = s.issuer
+		issuerDID, issuerErr := s.issuerForRequest(req.IssuerDID)
+		if issuerErr != nil {
+			results[i] = result{Error: issuerErr.Error()}
+			continue
 		}
 		var validFor time.Duration
 		if req.ValidFor != "" {

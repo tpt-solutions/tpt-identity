@@ -58,7 +58,7 @@ func (s *Server) handleIssueAgeProof(w http.ResponseWriter, r *http.Request) {
 	result, err := vcpkg.IssueAgeProof(
 		dobVC,
 		req.AgeThreshold,
-		s.issuer,
+		s.platformDID,
 		s.signingKey,
 		s.signingKeyID,
 		req.VerifierDID,
