@@ -327,6 +327,9 @@ func (s *SQLiteStore) migrate() error {
 	if err := s.migrateStatusLists(); err != nil {
 		return err
 	}
+	if err := s.migrateOID4VP(); err != nil {
+		return err
+	}
 	return nil
 }
 

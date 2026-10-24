@@ -35,6 +35,17 @@ type Store interface {
 	// to republish a status list VC after a revocation.
 	PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error
 
+	// --- OID4VP presentation state (JSON documents owned by the oidc package) ---
+	// SaveOID4VPRequest stores a request until expiresAt. It returns ErrOID4VPRequestExists for a reused id.
+	SaveOID4VPRequest(ctx context.Context, id string, data []byte, expiresAt time.Time) error
+	GetOID4VPRequest(ctx context.Context, id string) (data []byte, expiresAt time.Time, err error)
+	// SaveOID4VPResponse stores the one response a request accepts. A second response returns
+	// ErrOID4VPResponseExists; the primary key makes that atomic.
+	SaveOID4VPResponse(ctx context.Context, requestID string, data []byte) error
+	GetOID4VPResponse(ctx context.Context, requestID string) ([]byte, error)
+	// DeleteExpiredOID4VP removes requests (and their responses) that expired before now.
+	DeleteExpiredOID4VP(ctx context.Context, now time.Time) error
+
 	// --- Status lists (revocation) ---
 	CreateStatusList(ctx context.Context, rec *StatusListRecord) error
 	GetStatusList(ctx context.Context, id string) (*StatusListRecord, error)
@@ -420,3 +431,9 @@ type StatusListRecord struct {
 	Bits      []byte // raw bitstring: bit i set means index i is revoked
 	UpdatedAt time.Time
 }
+
+// ErrOID4VPRequestExists means a presentation request id is already in use.
+var ErrOID4VPRequestExists = errors.New("oid4vp request already exists")
+
+// ErrOID4VPResponseExists means the request already has its response.
+var ErrOID4VPResponseExists = errors.New("oid4vp response already received")
