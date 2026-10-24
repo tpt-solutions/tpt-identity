@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"strconv"
@@ -75,6 +76,7 @@ func (s *Server) handleAdminSuspendIdentity(w http.ResponseWriter, r *http.Reque
 	}
 	// End live sessions now; the role check in token verification blocks new use.
 	s.revokeSubjectSessions(r.Context(), did)
+	s.auditAdmin(r.Context(), r, "identity.suspended", did)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(id)
 }
@@ -96,6 +98,7 @@ func (s *Server) handleAdminUnsuspendIdentity(w http.ResponseWriter, r *http.Req
 		http.Error(w, "update identity: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.auditAdmin(r.Context(), r, "identity.unsuspended", did)
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(id)
 }
@@ -137,6 +140,7 @@ func (s *Server) handleAdminDeleteIdentity(w http.ResponseWriter, r *http.Reques
 		http.Error(w, "update identity: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.auditAdmin(r.Context(), r, "identity.deleted", did)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -161,6 +165,7 @@ func (s *Server) handleAdminDeleteClient(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "delete client: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.auditAdmin(r.Context(), r, "client.deleted", clientID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -172,6 +177,7 @@ func (s *Server) handleAdminClearLockout(w http.ResponseWriter, r *http.Request)
 		http.Error(w, "clear lockout: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	s.auditAdmin(r.Context(), r, "lockout.cleared", subject)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -192,5 +198,16 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]int{
 		"identity_count": identityTotal,
 		"client_count":   clientCount,
+	})
+}
+
+// auditAdmin records an administrative action in the verifiable audit log, through the event bus. Admin
+// calls carry an API key, not a user identity, so the actor is recorded as the admin credential. The
+// key itself is never recorded.
+func (s *Server) auditAdmin(ctx context.Context, r *http.Request, action, target string) {
+	s.events.Publish(ctx, "admin."+action, map[string]string{
+		"actor":  "admin-credential",
+		"target": target,
+		"ip":     s.clientIP(r),
 	})
 }
