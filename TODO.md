@@ -179,8 +179,8 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] URL-encode `state`/`acr_values`/redirect params (`logout.go`, `provider.go:135`, `bridge.go:561`, `stepup.go`); PAR `client_id` binding; CORS `*` reflection — redirect and CORS fixes done; PAR `client_id` binding still open
 - [ ] `vc.Issue`: tie `IssuerDID` to `VerificationMethodID`; `CheckStatus` panics on negative index; schema `additionalProperties` — IssuerDID is tied to the verification method and CheckStatus no longer panics; the schema additionalProperties check is still open
 - [x] `recovery.Combine` reject duplicate/zero share indices; `RecordAuthFailure` atomic with decay; `/oauth/introspect` client auth (see the commits adding those tests)
+- [x] SQLite `MaxOpenConns(1)`: audit for nested queries inside open `rows` (deadlock) — audited by reading: none of the 13 row loops query inside the loop, every loop defers rows.Close(), and the scan helpers make no database calls. A runtime check is still worth adding
 
-- [ ] SQLite `MaxOpenConns(1)`: audit for nested queries inside open `rows` (deadlock)
 
 ### 13.4 Wiring gaps (documented but not functional)
 - [x] WebAuthn config (`WebAuthnRPID` etc.) never set in `serve.go`; add `webauthn` section to config + example
@@ -199,8 +199,8 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] DID document update / key rotation / deactivation API
 - [ ] Persist OID4VP state and access-token revocation (replica-safe)
 - [ ] PostgreSQL store; multi-tenancy via existing `TenantID` fields
-- [ ] Scoped API keys / RBAC; admin credential separate from API key
-- [ ] Complete OIDC discovery metadata; serve `/.well-known/oauth-authorization-server` (RFC 8414)
+- [ ] Scoped API keys / RBAC; admin credential separate from API key — scoped API keys and a separate admin credential are done; per-user roles (RBAC) are still open
+- [x] Complete OIDC discovery metadata; serve `/.well-known/oauth-authorization-server` (RFC 8414) — discovery now advertises S256, response modes, auth methods and the request-parameter flags; RFC 8414 is served (`api/discovery_test.go`)
 - [ ] `private_key_jwt` client auth, DPoP (RFC 9449), JAR (RFC 9101), RFC 9068 `at+jwt`, RFC 9207 `iss` param
 - [ ] OID4VCI: `dc+sd-jwt` format, authorization_code flow, deferred issuance, enforce `tx_code`
 - [ ] OID4VP: signed request objects, `client_id_scheme`, DCQL, `direct_post.jwt`
@@ -225,7 +225,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] Embedded minimal HTML pages (login, consent, device approval, wallet/admin) via `embed`
 - [x] OpenAPI spec (`api/openapi.yaml`, served at `/openapi.yaml`, route-drift test)
 - [ ] Postman/Bruno collection; generated TS + Go client SDKs
-- [ ] CLI: `schemas list|show|validate|scaffold`, client registration command, `--output json|yaml`, shell completion docs
+- [ ] CLI: `schemas list|show|validate|scaffold`, client registration command, `--output json|yaml`, shell completion docs — `schemas list` and `schemas show` are done; validate, scaffold, client registration, `--output` and completion docs are still open
 - [x] `.github/` (CI build/vet/test/lint, Dependabot, issue templates; no PR template because contributions are issues only), Makefile, `.golangci.yml`
 - [x] CONTRIBUTING.md (issues only), CHANGELOG.md, CODE_OF_CONDUCT.md
 - [ ] Tag v0.x release
