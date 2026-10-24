@@ -17,6 +17,9 @@ import (
 // ErrEphemeralIssuer is returned when a did:key is used as an issuer DID.
 // did:key DIDs are self-certifying and cannot rotate keys; they must not be used
 // as issuers for persistent credentials.
+// ErrIssuerNotDID is returned when the issuer is not a DID. Credentials carry the issuer as a DID so verifiers can resolve its keys.
+var ErrIssuerNotDID = errors.New("issuer must be a DID (did:web, did:peer or did:ion)")
+
 var ErrEphemeralIssuer = errors.New("did:key is ephemeral and cannot be used as issuer for persistent credentials; use did:web or did:peer")
 
 // IssueOptions configures credential issuance.
@@ -44,6 +47,9 @@ type IssueOptions struct {
 // Issue creates and signs a Verifiable Credential using the DataIntegrityProof
 // with the eddsa-jcs-2022 cryptosuite (W3C Data Integrity).
 func Issue(opts IssueOptions) (*VerifiableCredential, error) {
+	if !strings.HasPrefix(opts.IssuerDID, "did:") {
+		return nil, ErrIssuerNotDID
+	}
 	if strings.HasPrefix(opts.IssuerDID, "did:key:") {
 		return nil, ErrEphemeralIssuer
 	}

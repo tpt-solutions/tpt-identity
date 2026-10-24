@@ -125,6 +125,12 @@ func (p *Policy) RevokeGrant(grantID string) error {
 	return fmt.Errorf("policy: grant %q not found", grantID)
 }
 
+// ValidateGrant checks a grant's required fields and the rules for its scope: the scope must
+// exist, extra-sensitive schemas and category grants need explicit confirmation.
+func ValidateGrant(g Grant) error {
+	return validateGrant(g)
+}
+
 func validateGrant(g Grant) error {
 	if g.SubjectDID == "" || g.RelyingDID == "" || g.ScopeID == "" {
 		return errors.New("policy: grant missing required fields")

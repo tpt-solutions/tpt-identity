@@ -187,6 +187,9 @@ type SDJWTIssueOptions struct {
 // Returns an SDJWTToken containing the issuer JWT and all disclosures.
 // The holder stores the full token; they present a subset of disclosures per verifier.
 func IssueSDJWT(opts SDJWTIssueOptions) (*SDJWTToken, error) {
+	if !strings.HasPrefix(opts.IssuerDID, "did:") {
+		return nil, ErrIssuerNotDID
+	}
 	if strings.HasPrefix(opts.IssuerDID, "did:key:") {
 		return nil, ErrEphemeralIssuer
 	}

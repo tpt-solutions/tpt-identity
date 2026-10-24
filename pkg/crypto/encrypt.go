@@ -68,3 +68,15 @@ func Open(key [KeySize]byte, ciphertext []byte) ([]byte, error) {
 	}
 	return plain, nil
 }
+
+// X25519PublicKey derives the public key for an X25519 private scalar.
+func X25519PublicKey(priv [KeySize]byte) ([KeySize]byte, error) {
+	basepoint := [KeySize]byte{9}
+	pub, err := curve25519.X25519(priv[:], basepoint[:])
+	if err != nil {
+		return [KeySize]byte{}, err
+	}
+	var out [KeySize]byte
+	copy(out[:], pub)
+	return out, nil
+}
