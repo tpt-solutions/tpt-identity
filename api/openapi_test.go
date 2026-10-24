@@ -116,4 +116,3 @@ func resolves(root any, ref string) bool {
 	}
 	return true
 }
-
