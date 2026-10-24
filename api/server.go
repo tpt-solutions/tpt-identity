@@ -71,6 +71,9 @@ type Server struct {
 	marketplace *marketplace.Registry
 	// OID4VP in-process request/response handler.
 	oid4vp *oidc.OID4VPHandler
+	// stop is closed by Close; it ends the background eviction loops.
+	stop     chan struct{}
+	stopOnce sync.Once
 }
 
 // Config holds Server configuration.
@@ -125,6 +128,11 @@ type Config struct {
 	Marketplace *marketplace.Registry
 }
 
+// Close stops the background eviction loops. It is safe to call more than once.
+func (s *Server) Close() {
+	s.stopOnce.Do(func() { close(s.stop) })
+}
+
 // NewServer wires all routes.
 func NewServer(cfg Config) *Server {
 	rateLimit := cfg.RateLimit
@@ -169,7 +177,9 @@ func NewServer(cfg Config) *Server {
 		trustedNets = append(trustedNets, ipNet)
 	}
 
+	stop := make(chan struct{})
 	s := &Server{
+		stop:               stop,
 		mux:                http.NewServeMux(),
 		store:              cfg.Store,
 		resolver:           cfg.Resolver,
@@ -191,7 +201,7 @@ func NewServer(cfg Config) *Server {
 		recoveries:         newRecoveryCollector(),
 		presentations:      newPresentationRequests(),
 		bridgeKey:          bridgeKey,
-		limiter:            newIPRateLimiter(rateLimit, int(rateLimit*2)),
+		limiter:            newIPRateLimiter(rateLimit, int(rateLimit*2), stop),
 		bridges:            bridges,
 		mapper:             bridge.NewMapper(cfg.Store),
 		events:             eventBus,
@@ -226,7 +236,14 @@ func NewServer(cfg Config) *Server {
 
 	// Periodically evict expired WebAuthn sessions (both registration and auth).
 	go func() {
-		for range time.Tick(5 * time.Minute) {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-s.stop:
+				return
+			case <-ticker.C:
+			}
 			now := time.Now()
 			s.waRegSessions.Range(func(k, v any) bool {
 				if v.(*waSessionEntry).expiresAt.Before(now) {
@@ -629,12 +646,19 @@ type ipRateLimiter struct {
 	capacity int     // max burst
 }
 
-func newIPRateLimiter(rate float64, capacity int) *ipRateLimiter {
+func newIPRateLimiter(rate float64, capacity int, stop <-chan struct{}) *ipRateLimiter {
 	l := &ipRateLimiter{buckets: make(map[string]*bucket), rate: rate, capacity: capacity}
 	// Periodically evict stale entries.
 	go func() {
-		for range time.Tick(5 * time.Minute) {
-			l.evict()
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-stop:
+				return
+			case <-ticker.C:
+				l.evict()
+			}
 		}
 	}()
 	return l

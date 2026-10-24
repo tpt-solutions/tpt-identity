@@ -34,6 +34,14 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 		result.Status = "degraded"
 	}
 
+	// Without the platform signing key the server cannot issue or verify anything.
+	if s.signingKey != nil {
+		result.Checks["signing_key"] = check{OK: true}
+	} else {
+		result.Checks["signing_key"] = check{OK: false, Error: "platform signing key not loaded"}
+		result.Status = "degraded"
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	if result.Status != "ok" {
 		w.WriteHeader(http.StatusServiceUnavailable)
