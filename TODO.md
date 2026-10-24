@@ -160,7 +160,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Enforce suspended/deleted roles in token + `/me` paths; admin delete purges refresh tokens/passwords/links
 - [x] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); `did_web` config not read: the platform DID is derived from `issuer` (see api/platform_did.go)
 - [x] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
-- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go`
+- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go` — presentation submit now verifies the holder signature, nonce, domain, enclosed credentials and holder==subject against a stored single-use request; SD-JWT KB/exp/kid checks still open
 - [x] `http.MaxBytesReader` on all JSON bodies; server timeouts (`ReadHeaderTimeout` etc.) + graceful shutdown
 - [x] TOTP: require old factor to re-enrol/unenrol; replay protection; pending state before first verify
 - [x] Consent: grant ID/subject from server not body; call `validateGrant`; unknown scope must not bypass extra-sensitive; revoke/delete check subject; `CanAccess` still has no callers (the policy engine is not yet wired into credential access)
