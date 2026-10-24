@@ -38,6 +38,17 @@ type DiscoveryDocument struct {
 	TokenExchangeSupported bool `json:"token_exchange_supported,omitempty"`
 	// OID4VCI
 	CredentialIssuerMetadataEndpoint string `json:"credential_issuer_metadata_endpoint,omitempty"`
+	// RFC 7636 (PKCE): S256 is the only method accepted.
+	CodeChallengeMethodsSupported []string `json:"code_challenge_methods_supported"`
+	// OIDC Core: the authorization response is returned as query parameters.
+	ResponseModesSupported []string `json:"response_modes_supported"`
+	// RFC 7662 and RFC 7009: the callers that may introspect or revoke authenticate as confidential clients.
+	IntrospectionEndpointAuthMethodsSupported []string `json:"introspection_endpoint_auth_methods_supported"`
+	RevocationEndpointAuthMethodsSupported    []string `json:"revocation_endpoint_auth_methods_supported"`
+	// OIDC Core and RFC 9126: request objects (JAR) are not accepted; request_uri (PAR) is.
+	RequestParameterSupported    bool `json:"request_parameter_supported"`
+	RequestURIParameterSupported bool `json:"request_uri_parameter_supported"`
+	ClaimsParameterSupported     bool `json:"claims_parameter_supported"`
 }
 
 // DiscoveryHandler returns an HTTP handler serving the OIDC discovery document.
@@ -71,10 +82,15 @@ func (p *Provider) DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 			"urn:ietf:params:oauth:grant-type:token-exchange",
 			"urn:ietf:params:oauth:grant-type:pre-authorized_code",
 		},
-		ACRValuesSupported:                []string{"social", "pwd", "mfa"},
-		BackchannelLogoutSupported:        true,
-		BackchannelLogoutSessionSupported: false,
-		TokenExchangeSupported:            true,
+		ACRValuesSupported:                        []string{"social", "pwd", "mfa"},
+		BackchannelLogoutSupported:                true,
+		BackchannelLogoutSessionSupported:         false,
+		TokenExchangeSupported:                    true,
+		CodeChallengeMethodsSupported:             []string{"S256"},
+		ResponseModesSupported:                    []string{"query"},
+		IntrospectionEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post"},
+		RevocationEndpointAuthMethodsSupported:    []string{"client_secret_basic", "client_secret_post", "none"},
+		RequestURIParameterSupported:              true,
 	}
 	b, _ := json.MarshalIndent(doc, "", "  ")
 	w.Header().Set("Content-Type", "application/json")

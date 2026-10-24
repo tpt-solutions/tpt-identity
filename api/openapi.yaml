@@ -1071,6 +1071,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/DiscoveryDocument"
+  /.well-known/oauth-authorization-server:
+    get:
+      tags: [Well-known]
+      operationId: getOAuthAuthorizationServerMetadata
+      summary: OAuth 2.0 authorization server metadata (RFC 8414); same document as the OIDC discovery
+      responses:
+        "200":
+          description: Authorization server metadata.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/DiscoveryDocument"
   /.well-known/jwks.json:
     get:
       tags: [Well-known]

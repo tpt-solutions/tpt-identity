@@ -314,6 +314,8 @@ func (s *Server) routes() {
 
 	// Public: OIDC, DID, JWKS, WebFinger
 	s.mux.HandleFunc("GET /.well-known/openid-configuration", s.wrap(s.audit(s.oidc.DiscoveryHandler)))
+	// RFC 8414: the same document is the OAuth 2.0 authorization server metadata.
+	s.mux.HandleFunc("GET /.well-known/oauth-authorization-server", s.wrap(s.audit(s.oidc.DiscoveryHandler)))
 	s.mux.HandleFunc("GET /.well-known/jwks.json", s.wrap(s.audit(s.oidc.JWKSHandler)))
 	s.mux.HandleFunc("GET /.well-known/did.json", s.wrap(s.audit(s.handleDIDDocument)))
 	s.mux.HandleFunc("GET /.well-known/webfinger", s.wrap(s.rateLimit(s.audit(s.oidc.WebFingerHandler))))
