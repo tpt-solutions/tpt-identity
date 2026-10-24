@@ -23,6 +23,7 @@ const vpVerifier = "did:peer:verifier-rp"
 
 type vpFixture struct {
 	h          *oidc.OID4VPHandler
+	provider   *oidc.Provider
 	issuerDID  string
 	issuerPriv []byte
 	holderDID  string
@@ -68,7 +69,7 @@ func newVPFixture(t *testing.T) *vpFixture {
 	h := oidc.NewOID4VPHandler(p)
 	h.SetResolver(resolver.New(time.Minute))
 	return &vpFixture{
-		h: h, issuerDID: issuerDID, issuerPriv: issuerPriv,
+		h: h, provider: p, issuerDID: issuerDID, issuerPriv: issuerPriv,
 		holderDID: holderDID, holderPriv: holderPriv, credential: *cred,
 	}
 }
@@ -159,10 +160,50 @@ func TestOID4VPRefusesWrongDomain(t *testing.T) {
 func TestOID4VPRefusesWithoutResolver(t *testing.T) {
 	f := newVPFixture(t)
 	_, key, _ := crypto.GenerateSigningKey()
-	f.h = oidc.NewOID4VPHandler(oidc.NewProvider("https://issuer.example.com", key, "key-1", nil))
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	f.h = oidc.NewOID4VPHandler(oidc.NewProvider("https://issuer.example.com", key, "key-1", st))
 	id, nonce := f.createRequest(t)
 
 	if w := f.post(t, id, f.presentation(t, nonce, vpVerifier)); w.Code == http.StatusOK {
 		t.Fatalf("accepted a presentation without a resolver: %s", w.Body.String())
+	}
+}
+
+// Request and response state lives in the store, so a second handler on the same store serves the
+// steps a first handler started.
+func TestOID4VPStateSharedAcrossHandlers(t *testing.T) {
+	f := newVPFixture(t)
+	other := oidc.NewOID4VPHandler(f.provider)
+	other.SetResolver(resolver.New(time.Minute))
+
+	id, nonce := f.createRequest(t)
+
+	getReq := httptest.NewRequest(http.MethodGet, "/oid4vp/requests/"+id, nil)
+	getReq.SetPathValue("id", id)
+	gw := httptest.NewRecorder()
+	other.GetRequestHandler(gw, getReq)
+	if gw.Code != http.StatusOK {
+		t.Fatalf("request served by the second handler: want 200, got %d", gw.Code)
+	}
+
+	form := url.Values{"state": {id}, "vp_token": {f.presentation(t, nonce, vpVerifier)}}
+	pr := httptest.NewRequest(http.MethodPost, "/oid4vp/responses", bytes.NewBufferString(form.Encode()))
+	pr.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	pw := httptest.NewRecorder()
+	other.PostResponseHandler(pw, pr)
+	if pw.Code != http.StatusOK {
+		t.Fatalf("response accepted by the second handler: want 200, got %d: %s", pw.Code, pw.Body.String())
+	}
+
+	rr := httptest.NewRequest(http.MethodGet, "/oid4vp/responses/"+id, nil)
+	rr.SetPathValue("id", id)
+	rw := httptest.NewRecorder()
+	f.h.GetResponseHandler(rw, rr)
+	if !strings.Contains(rw.Body.String(), `"complete"`) {
+		t.Errorf("first handler does not see the stored response: %s", rw.Body.String())
 	}
 }

@@ -8,17 +8,20 @@
 //  4. Wallet selects matching credentials and builds a VP
 //  5. Wallet POSTs the VP to POST /oid4vp/responses
 //  6. Verifier retrieves the result via GET /oid4vp/responses/{id}
+//
+// Requests and responses are kept in the store, so any replica can serve any step.
 package oidc
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 	vcpkg "github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
@@ -45,39 +48,70 @@ type OID4VPResponse struct {
 	Error      string    `json:"error,omitempty"`
 }
 
-// maxOID4VPResponses bounds the response map so unauthenticated posts cannot grow it without limit.
-const maxOID4VPResponses = 10000
+// errOID4VPNotFound means no request has the id, or it has expired.
+var errOID4VPNotFound = errors.New("unknown or expired request state")
 
-// OID4VPStore is an in-memory store for OID4VP requests and responses.
-// In production this should be backed by the persistent store; for now
-// in-memory is sufficient for the request/response round-trip TTL.
+// OID4VPStore keeps OID4VP requests and responses in the shared store.
 type OID4VPStore struct {
-	mu        sync.RWMutex
-	requests  map[string]*OID4VPRequest
-	responses map[string]*OID4VPResponse
+	st store.Store
 }
 
-func newOID4VPStore() *OID4VPStore {
-	return &OID4VPStore{
-		requests:  make(map[string]*OID4VPRequest),
-		responses: make(map[string]*OID4VPResponse),
+func (s *OID4VPStore) saveRequest(ctx context.Context, req *OID4VPRequest) error {
+	b, err := json.Marshal(req)
+	if err != nil {
+		return err
 	}
+	return s.st.SaveOID4VPRequest(ctx, req.ID, b, req.ExpiresAt)
 }
 
-func (s *OID4VPStore) evict() {
-	now := time.Now()
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	for id, req := range s.requests {
-		if req.ExpiresAt.Before(now) {
-			delete(s.requests, id)
-			delete(s.responses, id)
-		}
+// loadRequest returns the request with id, or errOID4VPNotFound. An expired request is not returned.
+func (s *OID4VPStore) loadRequest(ctx context.Context, id string) (*OID4VPRequest, error) {
+	b, expires, err := s.st.GetOID4VPRequest(ctx, id)
+	if errors.Is(err, store.ErrNotFound) {
+		return nil, errOID4VPNotFound
 	}
+	if err != nil {
+		return nil, err
+	}
+	var req OID4VPRequest
+	if err := json.Unmarshal(b, &req); err != nil {
+		return nil, fmt.Errorf("oid4vp: stored request: %w", err)
+	}
+	req.ExpiresAt = expires
+	if time.Now().After(expires) {
+		return nil, errOID4VPNotFound
+	}
+	return &req, nil
+}
+
+// saveResponse stores the one response a request accepts. A second one returns
+// store.ErrOID4VPResponseExists.
+func (s *OID4VPStore) saveResponse(ctx context.Context, resp *OID4VPResponse) error {
+	b, err := json.Marshal(resp)
+	if err != nil {
+		return err
+	}
+	return s.st.SaveOID4VPResponse(ctx, resp.RequestID, b)
+}
+
+func (s *OID4VPStore) loadResponse(ctx context.Context, requestID string) (*OID4VPResponse, error) {
+	b, err := s.st.GetOID4VPResponse(ctx, requestID)
+	if err != nil {
+		return nil, err
+	}
+	var resp OID4VPResponse
+	if err := json.Unmarshal(b, &resp); err != nil {
+		return nil, fmt.Errorf("oid4vp: stored response: %w", err)
+	}
+	return &resp, nil
+}
+
+// prune removes expired requests and their responses. Best effort: a failure does not stop a request.
+func (s *OID4VPStore) prune(ctx context.Context) {
+	_ = s.st.DeleteExpiredOID4VP(ctx, time.Now())
 }
 
 // OID4VPHandler provides the handler methods for OID4VP endpoints.
-// It holds a reference to the Provider and an in-memory request/response store.
 type OID4VPHandler struct {
 	p     *Provider
 	store *OID4VPStore
@@ -86,25 +120,15 @@ type OID4VPHandler struct {
 	resolver *resolver.Resolver
 }
 
-// NewOID4VPHandler creates a new OID4VP handler attached to the given provider.
+// NewOID4VPHandler creates a new OID4VP handler attached to the given provider. The provider's store
+// holds the request and response state.
 func NewOID4VPHandler(p *Provider) *OID4VPHandler {
-	return &OID4VPHandler{p: p, store: newOID4VPStore()}
+	return &OID4VPHandler{p: p, store: &OID4VPStore{st: p.store}}
 }
 
 // SetResolver sets the DID resolver used to verify presentations.
 func (h *OID4VPHandler) SetResolver(r *resolver.Resolver) {
 	h.resolver = r
-}
-
-// liveRequest returns the unexpired request with the given state.
-func (h *OID4VPHandler) liveRequest(state string) (*OID4VPRequest, error) {
-	h.store.mu.RLock()
-	defer h.store.mu.RUnlock()
-	req, ok := h.store.requests[state]
-	if !ok || time.Now().After(req.ExpiresAt) {
-		return nil, errors.New("unknown or expired request state")
-	}
-	return req, nil
 }
 
 // verifyVPToken checks a JSON verifiable presentation against the request. The holder's proof
@@ -139,7 +163,8 @@ func (h *OID4VPHandler) verifyVPToken(vpToken string, req *OID4VPRequest) error 
 //	{
 //	  "client_id":              "did:web:verifier.example.com",
 //	  "presentation_definition": { ... DIF PE v2 ... },
-//	  "expires_in":             300
+//	  "expires_in":             300,          // seconds, default 300
+//	  "response_mode":          "direct_post" // default
 //	}
 func (h *OID4VPHandler) CreateRequestHandler(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -180,10 +205,11 @@ func (h *OID4VPHandler) CreateRequestHandler(w http.ResponseWriter, r *http.Requ
 		CreatedAt:              time.Now(),
 	}
 
-	h.store.evict()
-	h.store.mu.Lock()
-	h.store.requests[id] = pReq
-	h.store.mu.Unlock()
+	h.store.prune(r.Context())
+	if err := h.store.saveRequest(r.Context(), pReq); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 
 	requestURI := fmt.Sprintf("%s/oid4vp/requests/%s", h.p.issuer, id)
 	deepLink := fmt.Sprintf("openid4vp://?request_uri=%s&client_id=%s", requestURI, req.ClientID)
@@ -204,16 +230,13 @@ func (h *OID4VPHandler) CreateRequestHandler(w http.ResponseWriter, r *http.Requ
 func (h *OID4VPHandler) GetRequestHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	h.store.mu.RLock()
-	pReq, ok := h.store.requests[id]
-	h.store.mu.RUnlock()
-
-	if !ok {
+	pReq, err := h.store.loadRequest(r.Context(), id)
+	if errors.Is(err, errOID4VPNotFound) {
 		http.Error(w, "request not found", http.StatusNotFound)
 		return
 	}
-	if time.Now().After(pReq.ExpiresAt) {
-		http.Error(w, "request expired", http.StatusGone)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
@@ -261,12 +284,13 @@ func (h *OID4VPHandler) PostResponseHandler(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	// Verify before storing: a presentation that fails is not recorded, so the wallet may retry.
-	pReq, err := h.liveRequest(state)
+	pReq, err := h.store.loadRequest(r.Context(), state)
 	if err != nil {
-		writeError(w, "invalid_request", err.Error())
+		writeError(w, "invalid_request", errOID4VPNotFound.Error())
 		return
 	}
+
+	// Verify before storing: a presentation that fails is not recorded, so the wallet may retry.
 	if err := h.verifyVPToken(vpToken, pReq); err != nil {
 		writeErrorStatus(w, http.StatusUnprocessableEntity, "invalid_vp_token", err.Error())
 		return
@@ -278,26 +302,15 @@ func (h *OID4VPHandler) PostResponseHandler(w http.ResponseWriter, r *http.Reque
 		State:      state,
 		ReceivedAt: time.Now(),
 	}
-
-	// The state must correspond to a live request, and each request accepts one response.
-	h.store.mu.Lock()
-	pReq, known := h.store.requests[state]
-	switch {
-	case !known || time.Now().After(pReq.ExpiresAt):
-		h.store.mu.Unlock()
-		writeError(w, "invalid_request", "unknown or expired request state")
-		return
-	case h.store.responses[state] != nil:
-		h.store.mu.Unlock()
-		writeErrorStatus(w, http.StatusConflict, "invalid_request", "a response was already received for this request")
-		return
-	case len(h.store.responses) >= maxOID4VPResponses:
-		h.store.mu.Unlock()
-		writeErrorStatus(w, http.StatusServiceUnavailable, "temporarily_unavailable", "too many pending responses")
+	// The store accepts one response per request; a second is refused by its primary key.
+	if err := h.store.saveResponse(r.Context(), resp); err != nil {
+		if errors.Is(err, store.ErrOID4VPResponseExists) {
+			writeErrorStatus(w, http.StatusConflict, "invalid_request", "a response was already received for this request")
+			return
+		}
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	h.store.responses[state] = resp
-	h.store.mu.Unlock()
 
 	// OID4VP §6.2: redirect_uri or direct_post response is 200 with redirect_uri.
 	w.Header().Set("Content-Type", "application/json")
@@ -311,17 +324,18 @@ func (h *OID4VPHandler) PostResponseHandler(w http.ResponseWriter, r *http.Reque
 func (h *OID4VPHandler) GetResponseHandler(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 
-	h.store.mu.RLock()
-	resp, ok := h.store.responses[id]
-	h.store.mu.RUnlock()
-
-	if !ok {
+	resp, err := h.store.loadResponse(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
 		_ = json.NewEncoder(w).Encode(map[string]string{
 			"status":  "pending",
 			"message": "Waiting for wallet to submit presentation.",
 		})
+		return
+	}
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
