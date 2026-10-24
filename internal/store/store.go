@@ -119,7 +119,9 @@ type Store interface {
 	ListExpiringGrants(ctx context.Context, within time.Duration) ([]*consent.Grant, error)
 
 	// --- Verifiable Audit Log (hash-chained events) ---
-	AppendAuditEvent(ctx context.Context, eventType, payload, prevHash string) (*AuditEvent, error)
+	// AppendAuditEvent links a new event to the current chain head. The head is read and the
+	// event written atomically, so concurrent appends cannot fork the chain.
+	AppendAuditEvent(ctx context.Context, eventType, payload string) (*AuditEvent, error)
 	GetAuditHead(ctx context.Context) (*AuditEvent, error)
 	ListAuditEvents(ctx context.Context, limit, offset int) ([]*AuditEvent, int, error)
 

@@ -1226,15 +1226,36 @@ func (s *SQLiteStore) ListExpiringGrants(ctx context.Context, within time.Durati
 
 // --- Verifiable Audit Log ---
 
-func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, eventType, payload, prevHash string) (*AuditEvent, error) {
+func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, eventType, payload string) (*AuditEvent, error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// The head is read in the same transaction that writes the new row.
+	prevHash := ""
+	var head string
+	switch err := tx.QueryRowContext(ctx, `SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`).Scan(&head); {
+	case err == nil:
+		prevHash = head
+	case errors.Is(err, sql.ErrNoRows):
+		// Empty chain: the first event links to the empty string.
+	default:
+		return nil, fmt.Errorf("audit: read chain head: %w", err)
+	}
+
 	raw, _ := json.Marshal(map[string]string{"event_type": eventType, "payload": payload, "prev_hash": prevHash})
 	sum := sha256.Sum256(append([]byte(prevHash), raw...))
 	hash := hex.EncodeToString(sum[:])
-	res, err := s.db.ExecContext(ctx,
+	res, err := tx.ExecContext(ctx,
 		`INSERT INTO audit_log (event_type, payload, hash, prev_hash) VALUES (?,?,?,?)`,
 		eventType, payload, hash, prevHash)
 	if err != nil {
 		return nil, err
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, fmt.Errorf("audit: commit: %w", err)
 	}
 	id, _ := res.LastInsertId()
 	return &AuditEvent{

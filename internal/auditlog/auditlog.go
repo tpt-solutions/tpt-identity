@@ -34,13 +34,9 @@ func (l *Logger) handle(ctx context.Context, event events.Event) {
 		payload = []byte("{}")
 	}
 
-	// Fetch the current chain head to continue the hash chain.
-	prevHash := ""
-	if head, err := l.store.GetAuditHead(ctx); err == nil {
-		prevHash = head.Hash
-	}
-
-	if _, err := l.store.AppendAuditEvent(ctx, event.Type, string(payload), prevHash); err != nil {
-		l.logger.Warn("auditlog: append", "event_type", event.Type, "err", err)
+	// The store links the event to the chain head within one transaction. A failed append is an
+	// error: the event is not in the verifiable log.
+	if _, err := l.store.AppendAuditEvent(ctx, event.Type, string(payload)); err != nil {
+		l.logger.Error("auditlog: event not recorded", "event_type", event.Type, "err", err)
 	}
 }
