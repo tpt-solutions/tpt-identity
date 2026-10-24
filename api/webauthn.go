@@ -234,6 +234,14 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// A sign counter that went backwards means the authenticator may be a clone. Refuse the login
+	// rather than start a session for a possibly stolen key.
+	if credential.Authenticator.CloneWarning {
+		s.logger.Warn("webauthn: possible cloned authenticator; login refused", "ip", s.clientIP(r))
+		http.Error(w, "authenticator may be cloned; login refused", http.StatusUnauthorized)
+		return
+	}
+
 	// Update the sign count and last-used timestamp for theft detection.
 	credIDStr := base64.RawURLEncoding.EncodeToString(credential.ID)
 	if existing, storeErr := s.store.GetWebAuthnCredential(r.Context(), credIDStr); storeErr == nil && existing != nil {
@@ -249,10 +257,21 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		"method":      "webauthn",
 	})
 
+	// The passkey proves the user, so the session is a real bearer token, like one from /token.
+	accessToken, ttl, err := s.oidc.MintAccessToken(subjectDID, s.issuer)
+	if err != nil {
+		http.Error(w, "session error", http.StatusInternalServerError)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]string{
-		"subject_did": subjectDID,
-		"status":      "authenticated",
+	w.Header().Set("Cache-Control", "no-store")
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"subject_did":  subjectDID,
+		"status":       "authenticated",
+		"access_token": accessToken,
+		"token_type":   "Bearer",
+		"expires_in":   int(ttl.Seconds()),
 	})
 }
 
