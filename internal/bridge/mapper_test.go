@@ -2,6 +2,7 @@ package bridge_test
 
 import (
 	"context"
+	"errors"
 	"sync"
 	"testing"
 
@@ -72,5 +73,15 @@ func TestConcurrentFirstLoginCreatesOneIdentity(t *testing.T) {
 	}
 	if total != 1 {
 		t.Errorf("want 1 platform identity, got %d", total)
+	}
+}
+
+// A lookup failure that is not "not found" must surface, not start a new identity.
+func TestIsNotFoundIsExact(t *testing.T) {
+	if !bridge.IsNotFoundForTest(store.ErrNotFound) {
+		t.Error("ErrNotFound not recognised")
+	}
+	if bridge.IsNotFoundForTest(errors.New("disk on fire: resource not found in cache")) {
+		t.Error("an unrelated error mentioning 'not found' was treated as not found")
 	}
 }

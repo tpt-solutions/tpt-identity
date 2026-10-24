@@ -4,10 +4,8 @@ import (
 	"context"
 	"crypto/ed25519"
 	"crypto/rand"
-	"database/sql"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -174,12 +172,8 @@ func (m *Mapper) createIdentity(ctx context.Context) (string, error) {
 	return didStr, nil
 }
 
+// isNotFound reports whether a store lookup found nothing. Stores return store.ErrNotFound for that;
+// matching error text would turn an unrelated failure that mentions "not found" into a create.
 func isNotFound(err error) bool {
-	if err == nil {
-		return false
-	}
-	msg := err.Error()
-	return errors.Is(err, sql.ErrNoRows) ||
-		strings.Contains(msg, "no rows") ||
-		strings.Contains(msg, "not found")
+	return errors.Is(err, store.ErrNotFound)
 }
