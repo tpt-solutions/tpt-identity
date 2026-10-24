@@ -214,7 +214,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] `go test -race ./...` in CI
 
 ### 13.7 Adoption & developer experience
-- [ ] `tpt-identity init` wizard — keys + valid `config.yaml` (random api_key / bridge secret) + migrate; `--profile dev|prod`
+- [x] `tpt-identity init` wizard — `init` writes keys, a config with fresh secrets, and the migrated database; prod encrypts keys with TPT_IDENTITY_PASSPHRASE
 - [ ] `tpt-identity doctor` / `config validate` / `version` with actionable errors — `config validate` and `version` are done; `doctor` is still open
 - [ ] `tpt-identity serve --demo` sandbox mode (seeded issuers, schemas, fake wallet)
 - [x] Remove enabled-by-default placeholder Google bridge from `config.yaml.example`; add missing keys (cors, trusted_proxies, consent, marketplace, webauthn)
