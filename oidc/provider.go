@@ -48,6 +48,8 @@ type Provider struct {
 	store      store.Store
 	// devicePolls records the last poll time per device_code for slow_down enforcement.
 	devicePolls sync.Map
+	// previousKeys are retired signing keys kept for verification (see AddPreviousKey).
+	previousKeys []verificationKey
 	// cNonces holds issued OID4VCI c_nonce values (nonce → expiry); each is single use.
 	cNonces sync.Map
 	// holderKeys resolves a holder DID to its published keys for OID4VCI proof checks.
@@ -486,7 +488,7 @@ func (p *Provider) SubjectFromBearer(authHeader string) (string, error) {
 // persistent revocation list. ID tokens are rejected, even though they are signed by
 // the same key.
 func (p *Provider) VerifyAccessToken(ctx context.Context, token string) (*Claims, error) {
-	claims, err := Verify(token, p.signingPub)
+	claims, err := p.verifyJWT(token)
 	if err != nil {
 		return nil, err
 	}

@@ -52,7 +52,7 @@ func (p *Provider) IntrospectHandler(w http.ResponseWriter, r *http.Request) {
 	inactive := IntrospectResponse{Active: false}
 
 	// Verify signature and expiry.
-	verified, err := Verify(token, p.signingPub)
+	verified, err := p.verifyJWT(token)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(inactive)

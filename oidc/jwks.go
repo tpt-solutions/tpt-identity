@@ -29,9 +29,9 @@ func (p *Provider) JWKSHandler(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(JWKS{Keys: p.publicJWKS()})
 }
 
-// publicJWKS returns the active signing key(s) as JWKs.
+// publicJWKS returns the current signing key and any retired keys that still verify tokens.
 func (p *Provider) publicJWKS() []JWK {
-	return []JWK{{
+	keys := []JWK{{
 		Kty: "OKP",
 		Crv: "Ed25519",
 		X:   base64.RawURLEncoding.EncodeToString([]byte(p.signingPub)),
@@ -39,4 +39,15 @@ func (p *Provider) publicJWKS() []JWK {
 		Alg: "EdDSA",
 		Kid: p.keyID,
 	}}
+	for _, k := range p.previousKeys {
+		keys = append(keys, JWK{
+			Kty: "OKP",
+			Crv: "Ed25519",
+			X:   base64.RawURLEncoding.EncodeToString([]byte(k.pub)),
+			Use: "sig",
+			Alg: "EdDSA",
+			Kid: k.kid,
+		})
+	}
+	return keys
 }

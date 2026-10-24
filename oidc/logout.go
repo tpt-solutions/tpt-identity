@@ -25,7 +25,7 @@ func (p *Provider) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	if idTokenHint != "" {
 		// An ID token hint is verified (signature, issuer, expiry); its audience names the
 		// client that the logout is for.
-		claims, err := Verify(idTokenHint, p.signingPub)
+		claims, err := p.verifyJWT(idTokenHint)
 		if err == nil && claims.Issuer == p.issuer && claims.TokenType == "id" {
 			subjectDID = claims.Subject
 			hintClientID = claims.Audience
