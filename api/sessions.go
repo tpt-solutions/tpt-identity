@@ -56,7 +56,7 @@ func (s *Server) handleListMySessions(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	json.NewEncoder(w).Encode(views)
+	_ = json.NewEncoder(w).Encode(views)
 }
 
 // handleRevokeMySession revokes a specific session belonging to the authenticated subject.

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 	"github.com/spf13/cobra"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 )
 
 func resolveCmd() *cobra.Command {

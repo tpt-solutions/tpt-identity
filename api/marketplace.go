@@ -10,10 +10,10 @@ import (
 func (s *Server) handleListMarketplace(w http.ResponseWriter, r *http.Request) {
 	if s.marketplace == nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode([]struct{}{})
+		_ = json.NewEncoder(w).Encode([]struct{}{})
 		return
 	}
 	entries := s.marketplace.List()
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(entries)
+	_ = json.NewEncoder(w).Encode(entries)
 }

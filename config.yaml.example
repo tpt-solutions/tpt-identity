@@ -13,6 +13,17 @@ listen_addr: ":8080"
 # Bearer token for the admin/API endpoints. Required: the server refuses to start without it.
 api_key: "change-me-to-a-long-random-string"
 
+# Separate credential for /admin/v1/* and the audit log. When set, api_key no longer reaches
+# admin endpoints. Strongly recommended in production.
+# admin_api_key: "change-me-to-a-third-long-random-string"
+
+# Least-privilege keys. Scopes: identities, credentials, consents, sessions, webhooks, audit,
+# recovery, presentations, oid4vci, oid4vp, oidc:clients, metrics, or "*" (all but admin).
+# scoped_api_keys:
+#   - name: "webhook-receiver"
+#     key: "change-me-to-another-long-random-string"
+#     scopes: ["webhooks"]
+
 # HMAC key for bridge (external login) state tokens. Use a separate random value of at
 # least 32 bytes. Required when running more than one replica; if unset, a random key is
 # generated at startup and in-flight bridge logins fail after a restart.
@@ -31,10 +42,7 @@ identity:
   # Verification method ID in the DID document (default: <issuer>#signing-key-1)
   key_id: ""
 
-# DID:web configuration
-did_web:
-  enabled: true
-  domain: "identity.example.com"
+# The platform did:web is derived from `issuer` (for example did:web:identity.example.com).
 
 # OIDC token lifetimes
 oidc:
@@ -51,12 +59,13 @@ totp_passphrase: ""
 # OIDC relying-party bridges — add one entry per upstream provider.
 # Supported: Google, GitHub, Azure AD, Okta, any OIDC-compliant IdP.
 bridges:
-  oidc:
-    - name: "google"
-      issuer: "https://accounts.google.com"
-      client_id: "your-google-client-id.apps.googleusercontent.com"
-      client_secret: "your-google-client-secret"
-      scopes: ["openid", "email", "profile"]
+  oidc: []
+    # Placeholder entries are disabled. Uncomment and fill in to enable an upstream provider.
+    # - name: "google"
+    #   issuer: "https://accounts.google.com"
+    #   client_id: "your-google-client-id.apps.googleusercontent.com"
+    #   client_secret: "your-google-client-secret"
+    #   scopes: ["openid", "email", "profile"]
 
     # - name: "github"
     #   issuer: "https://token.actions.githubusercontent.com"
@@ -77,21 +86,31 @@ bridges:
   password:
     enabled: false
 
-# SAML bridge (requires build tag: go build -tags saml ./...)
-# saml_idps:
+# SAML 2.0 SP bridge. Requires a binary built with: go build -tags saml ./cmd/tpt-identity
+# Configuring it in a binary built without the tag is a startup error.
+# bridges.saml:
 #   - name: "saml:acme-corp"
 #     idp_metadata_url: "https://sso.acme.com/metadata"
 #     entity_id: "https://identity.example.com"
+#     acs_path: "/auth/saml:acme-corp/acs"
 #     cert_file: "saml-sp.crt"
 #     key_file: "saml-sp.key"
 
-# LDAP bridge (requires build tag: go build -tags ldap ./...)
-# ldap:
+# LDAP/AD bind bridge. Requires a binary built with: go build -tags ldap ./cmd/tpt-identity
+# ldaps:// is mandatory; plaintext ldap:// is refused at startup.
+# bridges.ldap:
 #   url: "ldaps://ldap.example.com:636"
 #   bind_dn: "CN=svc-tpt,OU=ServiceAccounts,DC=example,DC=com"
 #   bind_password: "service-account-password"
 #   user_base_dn: "OU=Users,DC=example,DC=com"
 #   user_filter: "(sAMAccountName=%s)"
+
+# WebAuthn / passkeys. All three of rp_id, rp_display_name and rp_origins must be set to
+# enable the passkey endpoints. rp_origins defaults to [issuer] when empty.
+# webauthn:
+#   rp_id: "identity.example.com"
+#   rp_display_name: "TPT Identity"
+#   rp_origins: ["https://identity.example.com"]
 
 # Logging
 log:

@@ -24,7 +24,7 @@ func (s *Server) handleListGrants(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(grants)
+	_ = json.NewEncoder(w).Encode(grants)
 }
 
 // handleCreateGrant records consent from the signed-in subject. The subject comes from the
@@ -73,7 +73,7 @@ func (s *Server) handleCreateGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(g)
+	_ = json.NewEncoder(w).Encode(g)
 }
 
 // handleRevokeGrant withdraws one of the caller's grants. The record is kept with revoked_at
@@ -131,12 +131,12 @@ func (s *Server) handleSubmitReceipt(w http.ResponseWriter, r *http.Request) {
 		req.LegalBasis = consent.LegalBasisConsent
 	}
 	receipt, err := consent.Issue(consent.IssueOptions{
-		SubjectDID: req.SubjectDID,
-		RelyingDID: req.RelyingDID,
-		SchemaID:   req.SchemaID,
-		Purpose:    req.Purpose,
-		LegalBasis: req.LegalBasis,
-		ExpiresAt:  req.ExpiresAt,
+		SubjectDID:  req.SubjectDID,
+		RelyingDID:  req.RelyingDID,
+		SchemaID:    req.SchemaID,
+		Purpose:     req.Purpose,
+		LegalBasis:  req.LegalBasis,
+		ExpiresAt:   req.ExpiresAt,
 		SignerKey:   s.signingKey,
 		SignerKeyID: s.signingKeyID,
 	})
@@ -150,7 +150,7 @@ func (s *Server) handleSubmitReceipt(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(receipt)
+	_ = json.NewEncoder(w).Encode(receipt)
 }
 
 func (s *Server) handleListReceipts(w http.ResponseWriter, r *http.Request) {
@@ -175,7 +175,7 @@ func (s *Server) handleListReceipts(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	json.NewEncoder(w).Encode(receipts)
+	_ = json.NewEncoder(w).Encode(receipts)
 }
 
 func (s *Server) handleDeleteSession(w http.ResponseWriter, r *http.Request) {
@@ -201,5 +201,5 @@ func (s *Server) handleListSchemas(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }

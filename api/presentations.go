@@ -113,7 +113,7 @@ func (s *Server) handleCreatePresentationRequest(w http.ResponseWriter, r *http.
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(presentationRequestResponse{
+	_ = json.NewEncoder(w).Encode(presentationRequestResponse{
 		RequestID:  req.ID,
 		Nonce:      req.Nonce,
 		Definition: req.Definition,
@@ -180,7 +180,7 @@ func (s *Server) handleSubmitPresentation(w http.ResponseWriter, r *http.Request
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"satisfied":           result.Satisfied,
 		"errors":              result.Errors,
 		"matched_credentials": len(result.MatchedCredentials),

@@ -19,6 +19,7 @@ import (
 	"github.com/tpt-solutions/tpt-identity/internal/authn"
 	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	"github.com/tpt-solutions/tpt-identity/internal/events"
+	"github.com/tpt-solutions/tpt-identity/internal/netguard"
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
@@ -27,12 +28,14 @@ import (
 
 // Server is the tpt-identity HTTP server.
 type Server struct {
-	mux            *http.ServeMux
-	store          store.Store
-	resolver       *resolver.Resolver
-	oidc           *oidc.Provider
-	apiKey         string
-	issuer         string
+	mux      *http.ServeMux
+	store    store.Store
+	resolver *resolver.Resolver
+	oidc     *oidc.Provider
+	apiKey   string
+	adminKey string
+	scoped   []ScopedKey
+	issuer   string
 	// platformDID is the did:web identifier of this server; it is the issuer of every credential.
 	platformDID    string
 	platformDIDDoc []byte // JSON DID document served at /.well-known/did.json; nil if unavailable
@@ -72,12 +75,19 @@ type Server struct {
 
 // Config holds Server configuration.
 type Config struct {
-	APIKey         string
+	// APIKey is the master operator key. It grants every scope except admin when AdminAPIKey
+	// is set; otherwise it also grants admin.
+	APIKey string
+	// AdminAPIKey is a separate credential for /admin/v1/* and the audit log. When set, the
+	// master APIKey can no longer reach admin endpoints.
+	AdminAPIKey string
+	// ScopedKeys are least-privilege keys limited to the listed scopes (see the scope* constants).
+	ScopedKeys []ScopedKey
 	// BridgeSecret keys the HMAC on bridge state tokens. Set it (at least 32 bytes) when
 	// running more than one replica or when flows must survive a restart. If empty, a
 	// random key is generated at startup and in-flight bridge logins fail after a restart.
-	BridgeSecret string
-	Issuer       string
+	BridgeSecret   string
+	Issuer         string
 	TotpPassphrase string
 	// SigningKey is the platform Ed25519 private key used for VC and SD-JWT issuance.
 	SigningKey   ed25519.PrivateKey
@@ -86,10 +96,10 @@ type Config struct {
 	// Both EncKey and EncKeyID must be set to enable the POST /didcomm endpoint.
 	EncKey   [32]byte
 	EncKeyID string // key agreement method ID, e.g. did:web:example.com#enc-key-1
-	Store        store.Store
-	Resolver     *resolver.Resolver
-	OIDC         *oidc.Provider
-	Bridges      *bridge.Manager
+	Store    store.Store
+	Resolver *resolver.Resolver
+	OIDC     *oidc.Provider
+	Bridges  *bridge.Manager
 	// MagicLinkSender delivers magic-link URLs out of band (e.g. email). Required for
 	// POST /auth/magiclink/request to succeed; the link is never returned to the caller.
 	MagicLinkSender MagicLinkSender
@@ -165,6 +175,8 @@ func NewServer(cfg Config) *Server {
 		resolver:           cfg.Resolver,
 		oidc:               cfg.OIDC,
 		apiKey:             cfg.APIKey,
+		adminKey:           cfg.AdminAPIKey,
+		scoped:             cfg.ScopedKeys,
 		issuer:             cfg.Issuer,
 		platformDID:        platformDID,
 		platformDIDDoc:     platformDIDDoc,
@@ -239,6 +251,15 @@ func NewServer(cfg Config) *Server {
 		WebhookDeliveriesTotal.WithLabelValues(result).Inc()
 	})
 
+	// Session IPs recorded by the OIDC provider honour the same trusted proxies as the API.
+	if s.oidc != nil {
+		s.oidc.SetTrustedProxies(trustedNets)
+	}
+	// OID4VCI key proofs are checked against the holder DID's published keys.
+	if s.oidc != nil && s.resolver != nil {
+		s.oidc.SetHolderKeyResolver(holderKeyResolver(s.resolver))
+	}
+
 	// Wire credential bootstrap: auto-issue VCs from bridge claims for new identities.
 	if s.signingKey != nil {
 		s.mapper.SetBootstrap(s.bootstrapCredentials)
@@ -280,7 +301,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /token", s.wrap(s.rateLimit(s.audit(s.oidc.TokenHandler))))
 	s.mux.HandleFunc("GET /userinfo", s.wrap(s.rateLimit(s.audit(s.oidc.UserinfoHandler))))
 	// Client registration creates trusted relying parties, so it requires the operator key.
-	s.mux.HandleFunc("POST /oidc/register", s.wrap(s.rateLimit(s.audit(s.auth(s.oidc.RegisterClientHandler)))))
+	s.mux.HandleFunc("POST /oidc/register", s.wrap(s.rateLimit(s.audit(s.auth(scopeClients, s.oidc.RegisterClientHandler)))))
 	s.mux.HandleFunc("POST /oidc/revoke", s.wrap(s.rateLimit(s.audit(s.oidc.RevokeHandler))))
 	s.mux.HandleFunc("POST /oauth/introspect", s.wrap(s.rateLimit(s.audit(s.oidc.IntrospectHandler))))
 	// RP-initiated logout (OIDC Session Management)
@@ -294,10 +315,10 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /device", s.wrap(s.rateLimit(s.audit(s.oidc.DeviceVerifyHandler))))
 	s.mux.HandleFunc("POST /device/approve", s.wrap(s.rateLimit(s.audit(s.oidc.DeviceApproveHandler))))
 	// OID4VCI
-	s.mux.HandleFunc("POST /oid4vci/offers", s.wrap(s.rateLimit(s.audit(s.auth(s.oidc.CreateCredentialOfferHandler(s.signingKey, s.signingKeyID, s.store))))))
+	s.mux.HandleFunc("POST /oid4vci/offers", s.wrap(s.rateLimit(s.audit(s.auth(scopeOID4VCI, s.oidc.CreateCredentialOfferHandler(s.signingKey, s.signingKeyID, s.store))))))
 	s.mux.HandleFunc("POST /oid4vci/credential", s.wrap(s.rateLimit(s.audit(s.oidc.CredentialHandler(s.signingKey, s.signingKeyID, s.store)))))
 	// OID4VP
-	s.mux.HandleFunc("POST /oid4vp/requests", s.wrap(s.rateLimit(s.audit(s.auth(s.oid4vp.CreateRequestHandler)))))
+	s.mux.HandleFunc("POST /oid4vp/requests", s.wrap(s.rateLimit(s.audit(s.auth(scopeOID4VP, s.oid4vp.CreateRequestHandler)))))
 	s.mux.HandleFunc("GET /oid4vp/requests/{id}", s.wrap(s.rateLimit(s.audit(s.oid4vp.GetRequestHandler))))
 	s.mux.HandleFunc("POST /oid4vp/responses", s.wrap(s.rateLimit(s.audit(s.oid4vp.PostResponseHandler))))
 	s.mux.HandleFunc("GET /oid4vp/responses/{id}", s.wrap(s.rateLimit(s.audit(s.oid4vp.GetResponseHandler))))
@@ -307,7 +328,7 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /readyz", s.handleReadiness)
 
 	// Prometheus metrics — gated by api_key when configured
-	s.mux.HandleFunc("GET /metrics", s.wrap(s.auth(MetricsHandler().ServeHTTP)))
+	s.mux.HandleFunc("GET /metrics", s.wrap(s.auth(scopeMetrics, MetricsHandler().ServeHTTP)))
 
 	// Status list (public — verifiers fetch without auth)
 	s.mux.HandleFunc("GET /api/v1/status/{listId}", s.wrap(s.audit(s.handleStatusList)))
@@ -327,28 +348,28 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /auth/password/reset/confirm", s.wrap(s.rateLimit(s.audit(s.handlePasswordResetConfirm))))
 
 	// ── Protected API ──────────────────────────────────────────────────────
-	s.mux.HandleFunc("POST /api/v1/identities", s.wrap(s.rateLimit(s.audit(s.auth(s.handleCreateIdentity)))))
-	s.mux.HandleFunc("GET /api/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleGetIdentity)))))
-	s.mux.HandleFunc("POST /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.auth(s.handleIssueCredential)))))
-	s.mux.HandleFunc("POST /api/v1/credentials/verify", s.wrap(s.rateLimit(s.audit(s.auth(s.handleVerifyCredential)))))
-	s.mux.HandleFunc("GET /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListCredentials)))))
-	s.mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleDeleteCredential)))))
+	s.mux.HandleFunc("POST /api/v1/identities", s.wrap(s.rateLimit(s.audit(s.auth(scopeIdentities, s.handleCreateIdentity)))))
+	s.mux.HandleFunc("GET /api/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.auth(scopeIdentities, s.handleGetIdentity)))))
+	s.mux.HandleFunc("POST /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleIssueCredential)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/verify", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleVerifyCredential)))))
+	s.mux.HandleFunc("GET /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleListCredentials)))))
+	s.mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleDeleteCredential)))))
 	// SD-JWT selective disclosure
-	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt", s.wrap(s.rateLimit(s.audit(s.auth(s.handleIssueSDJWT)))))
-	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt/verify", s.wrap(s.rateLimit(s.audit(s.auth(s.handleVerifySDJWT)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleIssueSDJWT)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt/verify", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleVerifySDJWT)))))
 	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt/present", s.wrap(s.rateLimit(s.audit(s.handleSDJWTPresentWithWatermark))))
 	// Batch issuance + freshness oracle
-	s.mux.HandleFunc("POST /api/v1/credentials/batch", s.wrap(s.rateLimit(s.audit(s.auth(s.handleBatchIssueCredentials)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/batch", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleBatchIssueCredentials)))))
 	s.mux.HandleFunc("GET /api/v1/credentials/{id}/fresh", s.wrap(s.rateLimit(s.audit(s.handleCredentialFreshness))))
 	// ZKP — derived age-over proof (issuer-computed, no ZK-SNARK)
-	s.mux.HandleFunc("POST /api/v1/credentials/zkp/age", s.wrap(s.rateLimit(s.audit(s.auth(s.handleIssueAgeProof)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/zkp/age", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleIssueAgeProof)))))
 	s.mux.HandleFunc("GET /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleListGrants))))
 	s.mux.HandleFunc("POST /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleCreateGrant))))
 	s.mux.HandleFunc("DELETE /api/v1/consents/grants/{id}", s.wrap(s.rateLimit(s.audit(s.handleRevokeGrant))))
-	s.mux.HandleFunc("GET /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListReceipts)))))
-	s.mux.HandleFunc("POST /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(s.handleSubmitReceipt)))))
-	s.mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleDeleteSession)))))
-	s.mux.HandleFunc("GET /api/v1/schemas", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListSchemas)))))
+	s.mux.HandleFunc("GET /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(scopeConsents, s.handleListReceipts)))))
+	s.mux.HandleFunc("POST /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(scopeConsents, s.handleSubmitReceipt)))))
+	s.mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeSessions, s.handleDeleteSession)))))
+	s.mux.HandleFunc("GET /api/v1/schemas", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleListSchemas)))))
 
 	// ── Me — user self-service (bearer token, not api-key) ─────────────────
 	s.mux.HandleFunc("GET /api/v1/me", s.wrap(s.rateLimit(s.audit(s.handleGetMe))))
@@ -366,38 +387,41 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/me/privacy-budget/record", s.wrap(s.rateLimit(s.audit(s.handleRecordDisclosure))))
 
 	// ── Webhooks ───────────────────────────────────────────────────────────
-	s.mux.HandleFunc("POST /api/v1/webhooks", s.wrap(s.rateLimit(s.audit(s.auth(s.handleRegisterWebhook)))))
-	s.mux.HandleFunc("GET /api/v1/webhooks", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListWebhooks)))))
-	s.mux.HandleFunc("DELETE /api/v1/webhooks/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleDeleteWebhook)))))
-	s.mux.HandleFunc("POST /api/v1/webhooks/{id}/test", s.wrap(s.rateLimit(s.audit(s.auth(s.handleTestWebhook)))))
+	s.mux.HandleFunc("POST /api/v1/webhooks", s.wrap(s.rateLimit(s.audit(s.auth(scopeWebhooks, s.handleRegisterWebhook)))))
+	s.mux.HandleFunc("GET /api/v1/webhooks", s.wrap(s.rateLimit(s.audit(s.auth(scopeWebhooks, s.handleListWebhooks)))))
+	s.mux.HandleFunc("DELETE /api/v1/webhooks/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeWebhooks, s.handleDeleteWebhook)))))
+	s.mux.HandleFunc("POST /api/v1/webhooks/{id}/test", s.wrap(s.rateLimit(s.audit(s.auth(scopeWebhooks, s.handleTestWebhook)))))
 
 	// ── Audit log (api_key required) ───────────────────────────────────────
-	s.mux.HandleFunc("GET /api/v1/audit-log", s.wrap(s.rateLimit(s.audit(s.auth(s.handleListAuditLog)))))
-	s.mux.HandleFunc("GET /api/v1/audit-log/proof/{seq}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAuditProof)))))
+	s.mux.HandleFunc("GET /api/v1/audit-log", s.wrap(s.rateLimit(s.audit(s.auth(scopeAudit, s.handleListAuditLog)))))
+	s.mux.HandleFunc("GET /api/v1/audit-log/proof/{seq}", s.wrap(s.rateLimit(s.audit(s.auth(scopeAudit, s.handleAuditProof)))))
 
 	// ── Marketplace (public) ───────────────────────────────────────────────
+	// OpenAPI description of this API (public).
+	s.mux.HandleFunc("GET /openapi.yaml", s.wrap(s.audit(s.handleOpenAPI)))
+
 	s.mux.HandleFunc("GET /api/v1/marketplace", s.wrap(s.rateLimit(s.audit(s.handleListMarketplace))))
 
 	// ── Guardian recovery ──────────────────────────────────────────────────
 	s.mux.HandleFunc("POST /api/v1/me/recovery/enrol", s.wrap(s.rateLimit(s.audit(s.handleRecoveryEnrol))))
 	s.mux.HandleFunc("GET /api/v1/me/recovery", s.wrap(s.rateLimit(s.audit(s.handleGetRecoveryConfig))))
 	s.mux.HandleFunc("POST /api/v1/recovery/{id}/approve", s.wrap(s.rateLimit(s.audit(s.handleRecoveryApprove))))
-	s.mux.HandleFunc("POST /api/v1/recovery/initiate", s.wrap(s.rateLimit(s.audit(s.auth(s.handleRecoveryInitiate)))))
-	s.mux.HandleFunc("GET /api/v1/recovery/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleGetRecovery)))))
+	s.mux.HandleFunc("POST /api/v1/recovery/initiate", s.wrap(s.rateLimit(s.audit(s.auth(scopeRecovery, s.handleRecoveryInitiate)))))
+	s.mux.HandleFunc("GET /api/v1/recovery/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeRecovery, s.handleGetRecovery)))))
 
 	// ── Presentation Exchange ──────────────────────────────────────────────
-	s.mux.HandleFunc("POST /api/v1/presentations/request", s.wrap(s.rateLimit(s.audit(s.auth(s.handleCreatePresentationRequest)))))
-	s.mux.HandleFunc("POST /api/v1/presentations/submit", s.wrap(s.rateLimit(s.audit(s.auth(s.handleSubmitPresentation)))))
+	s.mux.HandleFunc("POST /api/v1/presentations/request", s.wrap(s.rateLimit(s.audit(s.auth(scopePresentations, s.handleCreatePresentationRequest)))))
+	s.mux.HandleFunc("POST /api/v1/presentations/submit", s.wrap(s.rateLimit(s.audit(s.auth(scopePresentations, s.handleSubmitPresentation)))))
 
 	// ── Admin API (api_key required) ──────────────────────────────────────────
-	s.mux.HandleFunc("GET /admin/v1/identities", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminListIdentities)))))
-	s.mux.HandleFunc("POST /admin/v1/identities/{did}/suspend", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminSuspendIdentity)))))
-	s.mux.HandleFunc("POST /admin/v1/identities/{did}/unsuspend", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminUnsuspendIdentity)))))
-	s.mux.HandleFunc("DELETE /admin/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminDeleteIdentity)))))
-	s.mux.HandleFunc("GET /admin/v1/clients", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminListClients)))))
-	s.mux.HandleFunc("DELETE /admin/v1/clients/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminDeleteClient)))))
-	s.mux.HandleFunc("POST /admin/v1/lockout/{subject}/clear", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminClearLockout)))))
-	s.mux.HandleFunc("GET /admin/v1/stats", s.wrap(s.rateLimit(s.audit(s.auth(s.handleAdminStats)))))
+	s.mux.HandleFunc("GET /admin/v1/identities", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminListIdentities)))))
+	s.mux.HandleFunc("POST /admin/v1/identities/{did}/suspend", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminSuspendIdentity)))))
+	s.mux.HandleFunc("POST /admin/v1/identities/{did}/unsuspend", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminUnsuspendIdentity)))))
+	s.mux.HandleFunc("DELETE /admin/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminDeleteIdentity)))))
+	s.mux.HandleFunc("GET /admin/v1/clients", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminListClients)))))
+	s.mux.HandleFunc("DELETE /admin/v1/clients/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminDeleteClient)))))
+	s.mux.HandleFunc("POST /admin/v1/lockout/{subject}/clear", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminClearLockout)))))
+	s.mux.HandleFunc("GET /admin/v1/stats", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminStats)))))
 
 	// ── WebAuthn / Passkeys ────────────────────────────────────────────────
 	// Registration uses OIDC bearer auth (user must already have a session).
@@ -429,9 +453,24 @@ func (s *Server) audit(next http.HandlerFunc) http.HandlerFunc {
 			"duration_ms", elapsed.Milliseconds(),
 			"user_agent", r.UserAgent(),
 		)
-		httpRequestsTotal.WithLabelValues(r.Method, r.URL.Path, strconv.Itoa(rw.status)).Inc()
-		httpRequestDuration.WithLabelValues(r.Method, r.URL.Path).Observe(elapsed.Seconds())
+		// Label by route pattern, not raw path: IDs in paths would otherwise create a new time
+		// series per request.
+		route := matchedRoute(r)
+		httpRequestsTotal.WithLabelValues(r.Method, route, strconv.Itoa(rw.status)).Inc()
+		httpRequestDuration.WithLabelValues(r.Method, route).Observe(elapsed.Seconds())
 	}
+}
+
+// matchedRoute returns the mux pattern that matched r, without its method prefix, or
+// "unmatched" when no route applies.
+func matchedRoute(r *http.Request) string {
+	if r.Pattern == "" {
+		return "unmatched"
+	}
+	if _, path, found := strings.Cut(r.Pattern, " "); found {
+		return path
+	}
+	return r.Pattern
 }
 
 // rateLimit rejects requests from IPs that exceed the configured token-bucket rate.
@@ -446,21 +485,72 @@ func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// auth middleware checks the Bearer API key.
-func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
+// Scopes that a ScopedKey can be granted. The master APIKey holds all of them.
+const (
+	scopeAdmin         = "admin"
+	scopeAudit         = "audit"
+	scopeClients       = "oidc:clients"
+	scopeCredentials   = "credentials"
+	scopeConsents      = "consents"
+	scopeIdentities    = "identities"
+	scopeMetrics       = "metrics"
+	scopeOID4VCI       = "oid4vci"
+	scopeOID4VP        = "oid4vp"
+	scopePresentations = "presentations"
+	scopeRecovery      = "recovery"
+	scopeSessions      = "sessions"
+	scopeWebhooks      = "webhooks"
+)
+
+// ScopedKey is a bearer credential restricted to the listed scopes. A scope of "*" grants all
+// non-admin scopes.
+type ScopedKey struct {
+	Name   string
+	Key    string
+	Scopes []string
+}
+
+// auth middleware checks the Bearer credential against the key set for the given scope.
+func (s *Server) auth(scope string, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		// Fail closed: an unconfigured key must never grant access.
-		if s.apiKey == "" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if subtle.ConstantTimeCompare([]byte(bearer), []byte(s.apiKey)) != 1 {
+		if !s.authorized(bearer, scope) {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
 	}
+}
+
+// authorized reports whether token may act within scope. Every comparison is constant-time and
+// an unconfigured or empty key never matches, so the middleware fails closed.
+func (s *Server) authorized(token, scope string) bool {
+	if token == "" {
+		return false
+	}
+	if scope == scopeAdmin && s.adminKey != "" {
+		// A dedicated admin credential replaces the master key for admin endpoints.
+		if constantEqual(token, s.adminKey) {
+			return true
+		}
+	} else if s.apiKey != "" && constantEqual(token, s.apiKey) {
+		return true
+	}
+	for _, k := range s.scoped {
+		if k.Key == "" || !constantEqual(token, k.Key) {
+			continue
+		}
+		for _, granted := range k.Scopes {
+			if granted == scope || (granted == "*" && scope != scopeAdmin) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func constantEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
 // parsePagination reads limit and offset from query params with safe defaults.
@@ -499,7 +589,7 @@ func randomHex(n int) (string, error) {
 func writeJSONError(w http.ResponseWriter, status int, code, description string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"error":             code,
 		"error_description": description,
 	})
@@ -510,9 +600,8 @@ func writeJSONError(w http.ResponseWriter, status int, code, description string)
 func (s *Server) handleLiveness(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/plain")
 	w.WriteHeader(http.StatusOK)
-	w.Write([]byte("ok"))
+	_, _ = w.Write([]byte("ok"))
 }
-
 
 // --- responseRecorder captures the status code for audit logging ---
 
@@ -587,31 +676,7 @@ func (l *ipRateLimiter) evict() {
 // clientIP returns the real client IP. X-Forwarded-For is only trusted when
 // the direct connection comes from a configured trusted proxy CIDR.
 func (s *Server) clientIP(r *http.Request) string {
-	remoteHost, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		remoteHost = r.RemoteAddr
-	}
-	if len(s.trustedProxies) > 0 {
-		remoteIP := net.ParseIP(remoteHost)
-		isTrusted := false
-		if remoteIP != nil {
-			for _, cidr := range s.trustedProxies {
-				if cidr.Contains(remoteIP) {
-					isTrusted = true
-					break
-				}
-			}
-		}
-		if isTrusted {
-			if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-				parts := strings.SplitN(fwd, ",", 2)
-				if ip := strings.TrimSpace(parts[0]); ip != "" {
-					return ip
-				}
-			}
-		}
-	}
-	return remoteHost
+	return netguard.ClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), s.trustedProxies)
 }
 
 // securityHeaders sets security-relevant response headers on every request.
@@ -634,8 +699,13 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 		if origin != "" && len(s.corsAllowedOrigins) > 0 {
 			for _, allowed := range s.corsAllowedOrigins {
 				if allowed == "*" || allowed == origin {
-					w.Header().Set("Access-Control-Allow-Origin", origin)
-					w.Header().Set("Vary", "Origin")
+					// A wildcard is answered as "*", never by echoing the caller's origin.
+					if allowed == "*" {
+						w.Header().Set("Access-Control-Allow-Origin", "*")
+					} else {
+						w.Header().Set("Access-Control-Allow-Origin", origin)
+						w.Header().Set("Vary", "Origin")
+					}
 					w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
 					w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type")
 					w.Header().Set("Access-Control-Max-Age", "600")
@@ -650,4 +720,3 @@ func (s *Server) cors(next http.HandlerFunc) http.HandlerFunc {
 		next(w, r)
 	}
 }
-

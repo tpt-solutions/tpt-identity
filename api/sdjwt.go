@@ -117,7 +117,7 @@ func (s *Server) handleIssueSDJWT(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp) //nolint:gosec // G117: the holder receives this credential by design
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -166,7 +166,7 @@ func (s *Server) handleVerifySDJWT(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(verifySDJWTResponse{Valid: false, Error: err.Error()})
+		_ = json.NewEncoder(w).Encode(verifySDJWTResponse{Valid: false, Error: err.Error()})
 		return
 	}
 
@@ -187,5 +187,5 @@ func (s *Server) handleVerifySDJWT(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

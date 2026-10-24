@@ -82,7 +82,7 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(cred)
+	_ = json.NewEncoder(w).Encode(cred)
 }
 
 func (s *Server) handleVerifyCredential(w http.ResponseWriter, r *http.Request) {
@@ -95,11 +95,11 @@ func (s *Server) handleVerifyCredential(w http.ResponseWriter, r *http.Request) 
 	if err := verifier.Verify(&cred); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)
-		json.NewEncoder(w).Encode(map[string]string{"valid": "false", "error": err.Error()})
+		_ = json.NewEncoder(w).Encode(map[string]string{"valid": "false", "error": err.Error()})
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"valid": "true"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"valid": "true"})
 }
 
 func (s *Server) handleListCredentials(w http.ResponseWriter, r *http.Request) {
@@ -124,7 +124,7 @@ func (s *Server) handleListCredentials(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	json.NewEncoder(w).Encode(creds)
+	_ = json.NewEncoder(w).Encode(creds)
 }
 
 func (s *Server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {

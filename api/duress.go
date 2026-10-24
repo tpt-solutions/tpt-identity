@@ -31,7 +31,7 @@ func (s *Server) handleDuressEnrol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"message": "Duress passphrase enrolled. Use it instead of your normal password when under coercion — authentication will succeed silently and a security alert will fire.",
 	})
 }

@@ -68,7 +68,7 @@ func (s *Server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(createIdentityResponse{
+	_ = json.NewEncoder(w).Encode(createIdentityResponse{
 		DID:      id,
 		Document: doc,
 		Keys: identityKeys{
@@ -87,5 +87,5 @@ func (s *Server) handleGetIdentity(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/did+json")
-	json.NewEncoder(w).Encode(doc)
+	_ = json.NewEncoder(w).Encode(doc)
 }

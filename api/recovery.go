@@ -107,7 +107,7 @@ func (s *Server) handleRecoveryEnrol(w http.ResponseWriter, r *http.Request) {
 		"guardian_count": len(req.GuardianDIDs),
 	})
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"message":        "Recovery enrolled",
 		"threshold":      req.Threshold,
 		"guardian_count": len(req.GuardianDIDs),
@@ -128,7 +128,7 @@ func (s *Server) handleGetRecoveryConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(cfg)
+	_ = json.NewEncoder(w).Encode(cfg)
 }
 
 // handleRecoveryInitiate starts a recovery for a subject. The recovery token is
@@ -199,7 +199,7 @@ func (s *Server) handleRecoveryInitiate(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"request_id": reqID,
 		"threshold":  cfg.Threshold,
 		"shares":     out,
@@ -286,7 +286,7 @@ func (s *Server) handleRecoveryApprove(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	if ready == nil {
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"request_id":       requestID,
 			"status":           "pending",
 			"shares_collected": count,
@@ -312,7 +312,7 @@ func (s *Server) handleRecoveryApprove(w http.ResponseWriter, r *http.Request) {
 		"request_id":  requestID,
 		"subject_did": recovReq.SubjectDID,
 	})
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"request_id": requestID,
 		"status":     "completed",
 	})
@@ -327,7 +327,7 @@ func (s *Server) handleGetRecovery(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(recovReq)
+	_ = json.NewEncoder(w).Encode(recovReq)
 }
 
 func randomRecoveryID() (string, error) {

@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/spf13/cobra"
 	"github.com/tpt-solutions/tpt-identity/pkg/did"
 	"github.com/tpt-solutions/tpt-identity/pkg/keystore"
-	"github.com/spf13/cobra"
 )
 
 func keygenCmd() *cobra.Command {
@@ -39,9 +39,9 @@ func keygenCmd() *cobra.Command {
 				fmt.Fprintln(os.Stderr, "Encryption key saved to", outEnc)
 			}
 			id, doc, err := did.Create(method, did.CreateOptions{
-				Domain:    domain,
+				Domain:     domain,
 				SigningPub: ks.SigningPub,
-				EncPub:    ks.EncPub[:],
+				EncPub:     ks.EncPub[:],
 			})
 			if err != nil {
 				return fmt.Errorf("create DID: %w", err)

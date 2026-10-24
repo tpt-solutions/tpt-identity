@@ -21,9 +21,9 @@ import (
 	"github.com/tpt-solutions/tpt-identity/pkg/keystore"
 	"github.com/tpt-solutions/tpt-identity/pkg/marketplace"
 	// Import all core schemas so their init() functions register at startup.
-	_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"
 )
 
 func serveCmd() *cobra.Command {
@@ -66,7 +66,7 @@ func serveCmd() *cobra.Command {
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 
 			ks, err := keystore.LoadSigning(
 				viper.GetString("identity.signing_key"),
@@ -85,6 +85,9 @@ func serveCmd() *cobra.Command {
 			}
 
 			issuer := viper.GetString("issuer")
+			if err := validateIssuer(issuer); err != nil {
+				return err
+			}
 			// Key IDs are fragments of the platform did:web, so verifiers can resolve them
 			// from /.well-known/did.json.
 			platformDID, err := api.PlatformDID(issuer)
@@ -102,6 +105,18 @@ func serveCmd() *cobra.Command {
 
 			res := resolver.New(5 * time.Minute)
 			oidcProvider := oidc.NewProvider(issuer, ks.SigningPriv, keyID, db)
+			ttls := oidc.TokenTTLs{
+				Code:    viper.GetDuration("oidc.code_ttl"),
+				ID:      viper.GetDuration("oidc.id_token_ttl"),
+				Access:  viper.GetDuration("oidc.access_token_ttl"),
+				Refresh: viper.GetDuration("oidc.refresh_token_ttl"),
+			}
+			for name, d := range map[string]time.Duration{"code_ttl": ttls.Code, "id_token_ttl": ttls.ID, "access_token_ttl": ttls.Access, "refresh_token_ttl": ttls.Refresh} {
+				if viper.IsSet("oidc."+name) && d <= 0 {
+					return fmt.Errorf("oidc.%s must be a positive duration, e.g. \"5m\"", name)
+				}
+			}
+			oidcProvider.SetTokenTTLs(ttls)
 
 			// ── Build bridge manager ──────────────────────────────────────
 			bridges := bridge.NewManager()
@@ -133,6 +148,15 @@ func serveCmd() *cobra.Command {
 			// Magic link bridge is always available.
 			bridges.Register(bridgeproviders.NewMagicLink(db))
 			logger.Info("bridge registered", "provider", "magiclink-email", "type", "magic_link")
+
+			// SAML and LDAP bridges exist only in builds made with their tags. Configuring one
+			// without its tag is a startup error.
+			if err := registerSAMLBridges(context.Background(), bridges, logger); err != nil {
+				return err
+			}
+			if err := registerLDAPBridges(bridges, logger); err != nil {
+				return err
+			}
 
 			// Password bridge — opt-in only.
 			if viper.GetBool("bridges.password.enabled") {
@@ -169,25 +193,39 @@ func serveCmd() *cobra.Command {
 				logger.Info("marketplace enabled")
 			}
 
+			var scopedKeys []api.ScopedKey
+			if err := viper.UnmarshalKey("scoped_api_keys", &scopedKeys); err != nil {
+				return fmt.Errorf("scoped_api_keys: %w", err)
+			}
+			adminKey := viper.GetString("admin_api_key")
+			if adminKey == "" {
+				logger.Warn("admin_api_key not set; admin endpoints accept the master api_key — set a separate admin_api_key in production")
+			}
+
 			srv := api.NewServer(api.Config{
-				APIKey:             viper.GetString("api_key"),
-				BridgeSecret:       viper.GetString("bridge_secret"),
-				Issuer:             issuer,
-				TotpPassphrase:     totpPassphrase,
-				SigningKey:         ks.SigningPriv,
-				SigningKeyID:       keyID,
-				EncKey:             ks.EncPriv,
-				EncKeyID:           encKeyID,
-				Store:              db,
-				Resolver:           res,
-				OIDC:               oidcProvider,
-				Bridges:            bridges,
-				Events:             eventBus,
-				Logger:             logger,
-				RateLimit:          viper.GetFloat64("rate_limit"),
-				TrustedProxies:     viper.GetStringSlice("server.trusted_proxies"),
-				CORSAllowedOrigins: viper.GetStringSlice("cors.allowed_origins"),
-				Marketplace:        market,
+				APIKey:                viper.GetString("api_key"),
+				AdminAPIKey:           adminKey,
+				ScopedKeys:            scopedKeys,
+				BridgeSecret:          viper.GetString("bridge_secret"),
+				Issuer:                issuer,
+				TotpPassphrase:        totpPassphrase,
+				SigningKey:            ks.SigningPriv,
+				SigningKeyID:          keyID,
+				EncKey:                ks.EncPriv,
+				EncKeyID:              encKeyID,
+				Store:                 db,
+				Resolver:              res,
+				OIDC:                  oidcProvider,
+				Bridges:               bridges,
+				Events:                eventBus,
+				Logger:                logger,
+				RateLimit:             viper.GetFloat64("rate_limit"),
+				TrustedProxies:        viper.GetStringSlice("server.trusted_proxies"),
+				CORSAllowedOrigins:    viper.GetStringSlice("cors.allowed_origins"),
+				Marketplace:           market,
+				WebAuthnRPID:          viper.GetString("webauthn.rp_id"),
+				WebAuthnRPDisplayName: viper.GetString("webauthn.rp_display_name"),
+				WebAuthnRPOrigins:     viper.GetStringSlice("webauthn.rp_origins"),
 			})
 
 			// ── Consent expiry warning goroutine ──────────────────────────

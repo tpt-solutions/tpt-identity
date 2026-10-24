@@ -31,5 +31,5 @@ func (s *Server) handleStatusList(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/vc+ld+json")
 	w.Header().Set("Cache-Control", "public, max-age=300") // 5-minute cache for verifiers
-	json.NewEncoder(w).Encode(cred)
+	_ = json.NewEncoder(w).Encode(cred)
 }

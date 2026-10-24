@@ -18,6 +18,7 @@ import (
 	"github.com/tpt-solutions/tpt-identity/internal/authn"
 	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
+	"github.com/tpt-solutions/tpt-identity/oidc"
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
@@ -33,7 +34,7 @@ type bridgeState struct {
 	OrigState           string `json:"orig_state,omitempty"`
 	CodeChallenge       string `json:"code_challenge,omitempty"`
 	CodeChallengeMethod string `json:"code_challenge_method,omitempty"`
-	LinkFor             string `json:"link_for,omitempty"`  // non-empty = link to existing DID
+	LinkFor             string `json:"link_for,omitempty"`         // non-empty = link to existing DID
 	AuthnRequestID      string `json:"authn_request_id,omitempty"` // SAML: anti-replay
 	Binding             string `json:"binding,omitempty"`          // must match the browser cookie on callback
 	CreatedAt           int64  `json:"created_at"`
@@ -144,7 +145,7 @@ func (s *Server) startRedirectBridge(w http.ResponseWriter, r *http.Request, rb 
 		return
 	}
 	st.Binding = binding
-	http.SetCookie(w, &http.Cookie{
+	http.SetCookie(w, &http.Cookie{ //nolint:gosec // Secure follows the issuer scheme so plain-HTTP dev still works
 		Name:     bridgeStateCookie,
 		Value:    binding,
 		Path:     "/auth/",
@@ -233,8 +234,8 @@ func (s *Server) handleBridgeCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "state is not bound to this browser", http.StatusBadRequest)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: bridgeStateCookie, Value: "", Path: "/auth/", MaxAge: -1, HttpOnly: true})
-	ext, err := rb.ExchangeCode(r.Context(), code)
+	http.SetCookie(w, &http.Cookie{Name: bridgeStateCookie, Value: "", Path: "/auth/", MaxAge: -1, HttpOnly: true, Secure: strings.HasPrefix(s.issuer, "https://"), SameSite: http.SameSiteLaxMode}) //nolint:gosec // Secure follows the issuer scheme, as on the set cookie above
+	ext, err := rb.ExchangeCode(r.Context(), code, rawState)
 	if err != nil {
 		http.Error(w, "upstream auth failed: "+err.Error(), http.StatusUnauthorized)
 		return
@@ -440,7 +441,7 @@ func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	verifyURL := s.issuer + "/auth/magiclink/verify?token=" + rawToken
+	verifyURL := s.issuer + "/auth/magiclink/verify?token=" + url.QueryEscape(rawToken)
 	if req.ClientID != "" {
 		st := bridgeState{
 			ClientID:    req.ClientID,
@@ -450,7 +451,7 @@ func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) 
 			CreatedAt:   time.Now().Unix(),
 		}
 		if stateToken, err := s.signBridgeState(st); err == nil {
-			verifyURL += "&state=" + stateToken
+			verifyURL = oidc.AppendQuery(verifyURL, map[string]string{"state": stateToken})
 		}
 	}
 
@@ -462,7 +463,7 @@ func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
 	})
 }
@@ -510,7 +511,7 @@ func (s *Server) handleListLinks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(links)
+	_ = json.NewEncoder(w).Encode(links)
 }
 
 // bootstrapCredentials is the bridge.BootstrapFunc called when a new platform
@@ -520,11 +521,12 @@ func (s *Server) handleListLinks(w http.ResponseWriter, r *http.Request) {
 // This runs asynchronously; context.Background() is used so cancellation of
 // the HTTP request doesn't abort in-flight issuance.
 func (s *Server) bootstrapCredentials(_ context.Context, subjectDID string, ext *bridge.ExternalIdentity) {
-	go func() {
+	go func() { //nolint:gosec // G118: deliberately detached from the request; see doc comment
 		ctx := context.Background()
 		s.maybeIssueBootstrapVC(ctx, subjectDID, "social.verified-contacts", func() map[string]string {
 			email := ext.Claims["email"]
-			if email == "" {
+			// An unverified address from an upstream IdP must not become a verified contact.
+			if email == "" || ext.Claims["email_verified"] != "true" {
 				return nil
 			}
 			return map[string]string{
@@ -619,7 +621,7 @@ func (s *Server) finishBridgeAuth(w http.ResponseWriter, r *http.Request, ext *b
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "linked", "provider": ext.Provider})
+		_ = json.NewEncoder(w).Encode(map[string]string{"status": "linked", "provider": ext.Provider})
 		return
 	}
 
@@ -654,15 +656,16 @@ func (s *Server) finishBridgeAuth(w http.ResponseWriter, r *http.Request, ext *b
 			http.Error(w, "session error: "+err.Error(), http.StatusInternalServerError)
 			return
 		}
-		redirect := st.RedirectURI + "?code=" + authCode
+		params := map[string]string{"code": authCode}
 		if st.OrigState != "" {
-			redirect += "&state=" + st.OrigState
+			params["state"] = st.OrigState
 		}
-		http.Redirect(w, r, redirect, http.StatusFound)
+		redirect := oidc.AppendQuery(st.RedirectURI, params)
+		http.Redirect(w, r, redirect, http.StatusFound) //nolint:gosec // G710: redirect validated by checkClientRedirect above
 		return
 	}
 
 	// No OIDC flow — return the DID directly (API/CLI use case).
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"did": subjectDID, "provider": ext.Provider})
+	_ = json.NewEncoder(w).Encode(map[string]string{"did": subjectDID, "provider": ext.Provider})
 }

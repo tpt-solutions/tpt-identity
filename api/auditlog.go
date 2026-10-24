@@ -17,7 +17,7 @@ func (s *Server) handleListAuditLog(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	json.NewEncoder(w).Encode(events)
+	_ = json.NewEncoder(w).Encode(events)
 }
 
 // handleAuditProof returns the hash chain from a given sequence number to the
@@ -54,10 +54,10 @@ func (s *Server) handleAuditProof(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"from_seq":   fromSeq,
-		"head_seq":   head.Seq,
-		"head_hash":  head.Hash,
-		"chain":      events,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"from_seq":  fromSeq,
+		"head_seq":  head.Seq,
+		"head_hash": head.Hash,
+		"chain":     events,
 	})
 }

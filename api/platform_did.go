@@ -6,30 +6,15 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 
 	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
-// PlatformDID returns the did:web identifier for the server at issuer, for example
-// https://id.example.com -> did:web:id.example.com. A port is written as %3A, as the
-// did:web method requires. Verifiers resolve the platform DID at /.well-known/did.json.
+// PlatformDID returns the did:web identifier for the server at issuer. See did.PlatformDID.
 func PlatformDID(issuer string) (string, error) {
-	u, err := url.Parse(issuer)
-	if err != nil || u.Host == "" {
-		return "", fmt.Errorf("issuer %q is not an absolute URL", issuer)
-	}
-	host := u.Hostname()
-	if host == "" {
-		return "", fmt.Errorf("issuer %q has no host", issuer)
-	}
-	domain := host
-	if port := u.Port(); port != "" {
-		domain = host + "%3A" + port
-	}
-	return "did:web:" + domain, nil
+	return did.PlatformDID(issuer)
 }
 
 // buildPlatformDIDDocument produces the JSON DID document for the platform identity. It

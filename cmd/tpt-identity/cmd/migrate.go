@@ -4,9 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/tpt-solutions/tpt-identity/internal/store/migrations"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/tpt-solutions/tpt-identity/internal/store/migrations"
 	_ "modernc.org/sqlite"
 )
 

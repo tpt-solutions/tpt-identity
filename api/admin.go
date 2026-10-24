@@ -33,7 +33,7 @@ func (s *Server) handleAdminListIdentities(w http.ResponseWriter, r *http.Reques
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	json.NewEncoder(w).Encode(ids)
+	_ = json.NewEncoder(w).Encode(ids)
 }
 
 // handleAdminSuspendIdentity sets an identity's role to "suspended".
@@ -54,7 +54,7 @@ func (s *Server) handleAdminSuspendIdentity(w http.ResponseWriter, r *http.Reque
 	// End live sessions now; the role check in token verification blocks new use.
 	s.revokeSubjectSessions(r.Context(), did)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(id)
+	_ = json.NewEncoder(w).Encode(id)
 }
 
 // handleAdminUnsuspendIdentity restores a suspended identity's role to "user".
@@ -75,7 +75,7 @@ func (s *Server) handleAdminUnsuspendIdentity(w http.ResponseWriter, r *http.Req
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(id)
+	_ = json.NewEncoder(w).Encode(id)
 }
 
 // handleAdminDeleteIdentity removes an identity and its linked credentials.
@@ -128,7 +128,7 @@ func (s *Server) handleAdminListClients(w http.ResponseWriter, r *http.Request) 
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("X-Total-Count", strconv.Itoa(len(clients)))
-	json.NewEncoder(w).Encode(clients)
+	_ = json.NewEncoder(w).Encode(clients)
 }
 
 // handleAdminDeleteClient removes a registered OIDC client.
@@ -167,7 +167,7 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		clientCount = len(clients)
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]int{
+	_ = json.NewEncoder(w).Encode(map[string]int{
 		"identity_count": identityTotal,
 		"client_count":   clientCount,
 	})

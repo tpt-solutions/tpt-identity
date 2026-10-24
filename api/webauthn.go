@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"time"
 
-	gowebauthn "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/go-webauthn/webauthn/protocol"
+	gowebauthn "github.com/go-webauthn/webauthn/webauthn"
 	"github.com/google/uuid"
 
 	"github.com/tpt-solutions/tpt-identity/internal/store"
@@ -29,10 +29,10 @@ type waUser struct {
 	creds      []*store.WebAuthnCredential
 }
 
-func (u *waUser) WebAuthnID() []byte           { return []byte(u.subjectDID) }
-func (u *waUser) WebAuthnName() string          { return u.subjectDID }
-func (u *waUser) WebAuthnDisplayName() string   { return u.subjectDID }
-func (u *waUser) WebAuthnIcon() string          { return "" } //nolint:staticcheck // required by webauthn.User interface
+func (u *waUser) WebAuthnID() []byte          { return []byte(u.subjectDID) }
+func (u *waUser) WebAuthnName() string        { return u.subjectDID }
+func (u *waUser) WebAuthnDisplayName() string { return u.subjectDID }
+func (u *waUser) WebAuthnIcon() string        { return "" } //nolint:staticcheck // required by webauthn.User interface
 
 func (u *waUser) WebAuthnCredentials() []gowebauthn.Credential {
 	out := make([]gowebauthn.Credential, len(u.creds))
@@ -91,7 +91,7 @@ func (s *Server) handleWebAuthnRegisterBegin(w http.ResponseWriter, r *http.Requ
 	http.SetCookie(w, waCookie("wa_reg_session", sessionID, 300))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(creation)
+	_ = json.NewEncoder(w).Encode(creation)
 }
 
 // handleWebAuthnRegisterFinish completes the WebAuthn registration ceremony and
@@ -149,7 +149,7 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 		PublicKeyCBOR:   credential.PublicKey,
 		AttestationType: credential.AttestationType,
 		AAGUID:          aaguidStr,
-		SignCount:        credential.Authenticator.SignCount,
+		SignCount:       credential.Authenticator.SignCount,
 		Transports:      transports,
 		CreatedAt:       now,
 	}
@@ -163,7 +163,7 @@ func (s *Server) handleWebAuthnRegisterFinish(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"credential_id": credIDStr,
 		"subject_did":   subjectDID,
 		"status":        "registered",
@@ -195,7 +195,7 @@ func (s *Server) handleWebAuthnLoginBegin(w http.ResponseWriter, r *http.Request
 	http.SetCookie(w, waCookie("wa_auth_session", sessionID, 300))
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(assertion)
+	_ = json.NewEncoder(w).Encode(assertion)
 }
 
 // handleWebAuthnLoginFinish validates the authenticator assertion and returns the
@@ -250,7 +250,7 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 	})
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"subject_did": subjectDID,
 		"status":      "authenticated",
 	})
@@ -292,7 +292,7 @@ func (s *Server) handleListWebAuthnCredentials(w http.ResponseWriter, r *http.Re
 		}
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(out)
+	_ = json.NewEncoder(w).Encode(out)
 }
 
 // handleDeleteWebAuthnCredential removes a passkey for the authenticated subject.

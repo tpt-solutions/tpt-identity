@@ -132,7 +132,7 @@ func (s *Server) handlePasswordChange(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
 
 // handlePasswordResetRequest handles POST /auth/password/reset/request.
@@ -181,7 +181,7 @@ func (s *Server) handlePasswordResetRequest(w http.ResponseWriter, r *http.Reque
 
 	// Always return 200 — do not reveal whether identifier exists.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"status":  "ok",
 		"message": "If this identifier is registered, a reset link has been sent.",
 	})
@@ -242,5 +242,5 @@ func (s *Server) handlePasswordResetConfirm(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }

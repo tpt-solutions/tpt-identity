@@ -6,9 +6,9 @@ import (
 	"os"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
-	"github.com/spf13/cobra"
 )
 
 func verifyVCCmd() *cobra.Command {

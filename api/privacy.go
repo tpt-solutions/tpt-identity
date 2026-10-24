@@ -27,11 +27,11 @@ func (s *Server) handleGetPrivacyBudget(w http.ResponseWriter, r *http.Request) 
 
 	// Aggregate by schema_id.
 	type schemaStats struct {
-		SchemaID        string            `json:"schema_id"`
-		TotalShares     int               `json:"total_shares"`
-		UniqueVerifiers int               `json:"unique_verifiers"`
-		LastSharedAt    *time.Time        `json:"last_shared_at,omitempty"`
-		VerifierCounts  map[string]int    `json:"verifier_counts"` // verifier_did → count
+		SchemaID        string         `json:"schema_id"`
+		TotalShares     int            `json:"total_shares"`
+		UniqueVerifiers int            `json:"unique_verifiers"`
+		LastSharedAt    *time.Time     `json:"last_shared_at,omitempty"`
+		VerifierCounts  map[string]int `json:"verifier_counts"` // verifier_did → count
 	}
 	statsMap := map[string]*schemaStats{}
 	verifierSets := map[string]map[string]bool{} // schema_id → set of verifier DIDs
@@ -62,7 +62,7 @@ func (s *Server) handleGetPrivacyBudget(w http.ResponseWriter, r *http.Request) 
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"subject_did":    subjectDID,
 		"total_shares":   len(disclosures),
 		"schema_budgets": out,
@@ -119,7 +119,7 @@ func (s *Server) handleRecordDisclosure(w http.ResponseWriter, r *http.Request) 
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(d)
+	_ = json.NewEncoder(w).Encode(d)
 }
 
 func extractBearer(r *http.Request) string {

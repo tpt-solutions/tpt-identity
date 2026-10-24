@@ -82,7 +82,7 @@ func (s *Server) handleBatchIssueCredentials(w http.ResponseWriter, r *http.Requ
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(results)
+	_ = json.NewEncoder(w).Encode(results)
 }
 
 // handleCredentialFreshness handles GET /api/v1/credentials/{id}/fresh.
@@ -129,5 +129,5 @@ func (s *Server) handleCredentialFreshness(w http.ResponseWriter, r *http.Reques
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "max-age=60") // freshness assertions cacheable for 1 minute
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }

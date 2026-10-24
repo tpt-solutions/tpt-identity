@@ -6,9 +6,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/spf13/cobra"
 	"github.com/tpt-solutions/tpt-identity/pkg/keystore"
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
-	"github.com/spf13/cobra"
 )
 
 func issueVCCmd() *cobra.Command {

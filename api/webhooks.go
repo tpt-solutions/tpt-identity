@@ -70,7 +70,7 @@ func (s *Server) handleRegisterWebhook(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(registerWebhookResponse{
+	_ = json.NewEncoder(w).Encode(registerWebhookResponse{
 		ID:            sub.ID,
 		URL:           sub.URL,
 		EventTypes:    sub.EventTypes,
@@ -100,7 +100,7 @@ func (s *Server) handleListWebhooks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(subs)
+	_ = json.NewEncoder(w).Encode(subs)
 }
 
 // handleTestWebhook handles POST /api/v1/webhooks/{id}/test.
@@ -118,7 +118,7 @@ func (s *Server) handleTestWebhook(w http.ResponseWriter, r *http.Request) {
 	s.events.Ping(sub)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"webhook_id": sub.ID,
 		"url":        sub.URL,
 		"status":     "ping_sent",

@@ -70,7 +70,7 @@ func (s *Server) handleIssueAgeProof(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // handleSDJWTPresentWithWatermark handles POST /api/v1/credentials/sd-jwt/present.
@@ -124,7 +124,7 @@ func (s *Server) handleSDJWTPresentWithWatermark(w http.ResponseWriter, r *http.
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"presentation":    presentation,
 		"presentation_id": record.PresentationID,
 		"verifier_did":    record.VerifierDID,

@@ -43,7 +43,7 @@ func (s *Server) handleTOTPEnrol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"otpauth_uri": uri,
 		"message":     "Scan the URI with your authenticator app, then verify with POST /api/v1/me/totp/verify",
 	})
@@ -76,7 +76,7 @@ func (s *Server) handleTOTPVerify(w http.ResponseWriter, r *http.Request) {
 
 	s.lockout.RecordSuccess(r.Context(), subjectDID)
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "verified"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "verified"})
 }
 
 // handleTOTPUnenrol removes the TOTP factor. An active factor needs a current code.
