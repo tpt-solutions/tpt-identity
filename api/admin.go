@@ -16,24 +16,46 @@ import (
 // GET /admin/v1/identities?limit=100&offset=0&role=user
 func (s *Server) handleAdminListIdentities(w http.ResponseWriter, r *http.Request) {
 	limit, offset := parsePagination(r, 100, 500)
-	ids, total, err := s.store.ListIdentities(r.Context(), limit, offset)
-	if err != nil {
-		http.Error(w, "list identities: "+err.Error(), http.StatusInternalServerError)
+	role := r.URL.Query().Get("role")
+	if role == "" {
+		ids, total, err := s.store.ListIdentities(r.Context(), limit, offset)
+		if err != nil {
+			http.Error(w, "list identities: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("X-Total-Count", strconv.Itoa(total))
+		_ = json.NewEncoder(w).Encode(ids)
 		return
 	}
-	// Optional role filter applied in-memory (the table is small).
-	if role := r.URL.Query().Get("role"); role != "" {
-		filtered := ids[:0]
-		for _, id := range ids {
+
+	// A role filter must apply before pagination, or pages come back short and the total is wrong.
+	// Scan the table in batches and keep the matches.
+	var matches []*store.Identity
+	const batch = 500
+	for scan := 0; ; scan += batch {
+		page, _, err := s.store.ListIdentities(r.Context(), batch, scan)
+		if err != nil {
+			http.Error(w, "list identities: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		for _, id := range page {
 			if id.Role == role {
-				filtered = append(filtered, id)
+				matches = append(matches, id)
 			}
 		}
-		ids = filtered
+		if len(page) < batch {
+			break
+		}
+	}
+	end := min(offset+limit, len(matches))
+	page := []*store.Identity{}
+	if offset < len(matches) {
+		page = matches[offset:end]
 	}
 	w.Header().Set("Content-Type", "application/json")
-	w.Header().Set("X-Total-Count", strconv.Itoa(total))
-	_ = json.NewEncoder(w).Encode(ids)
+	w.Header().Set("X-Total-Count", strconv.Itoa(len(matches)))
+	_ = json.NewEncoder(w).Encode(page)
 }
 
 // handleAdminSuspendIdentity sets an identity's role to "suspended".
