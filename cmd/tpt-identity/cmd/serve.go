@@ -119,6 +119,20 @@ func serveCmd() *cobra.Command {
 			}
 			oidcProvider.SetTokenTTLs(ttls)
 
+			// Retired signing keys keep verifying the tokens they signed until those expire.
+			retired, err := loadPreviousKeys()
+			if err != nil {
+				return err
+			}
+			for _, k := range retired {
+				if err := oidcProvider.AddPreviousKey(k.kid, k.pub); err != nil {
+					return fmt.Errorf("identity.previous_keys: %w", err)
+				}
+			}
+			if len(retired) > 0 {
+				logger.Info("retired signing keys loaded for verification", "count", len(retired))
+			}
+
 			// ── Build bridge manager ──────────────────────────────────────
 			bridges := bridge.NewManager()
 

@@ -100,6 +100,14 @@ func validateConfig(path string) []configProblem {
 		add("error", "smtp.host is set but smtp.from is not; the relay needs a sender address")
 	}
 
+	if v.IsSet("identity.previous_keys") {
+		var entries []previousKeyEntry
+		if err := v.UnmarshalKey("identity.previous_keys", &entries); err != nil {
+			add("error", "identity.previous_keys is malformed: %v", err)
+		} else if _, err := parsePreviousKeys(entries); err != nil {
+			add("error", "%v", err)
+		}
+	}
 	if v.GetString("api_key") == "" {
 		add("error", "api_key is not set (the server refuses to start without it)")
 	}
@@ -178,6 +186,7 @@ var knownConfigKeys = map[string]bool{
 	"identity.enc_key":            true,
 	"identity.passphrase":         true,
 	"identity.key_id":             true,
+	"identity.previous_keys":      true,
 	"identity.enc_key_id":         true,
 	"oidc.code_ttl":               true,
 	"oidc.id_token_ttl":           true,
