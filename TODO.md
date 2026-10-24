@@ -194,7 +194,6 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added. The migration check is blocked: OpenSQLite creates tables inline and never writes schema_migrations, which only `migrate up` does, so a check would mark a normal start as degraded. Unify the two schema paths first
 - [x] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter, WebAuthn eviction and webhook deliveries all stop or drain on shutdown
 
-
 ### 13.5 Standards / production readiness
 - [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility — the verification side is done (retired keys by kid, in the JWKS). Still open: the rotation CLI, RS256/ES256, and the DID-document side
 - [ ] DID document update / key rotation / deactivation API
