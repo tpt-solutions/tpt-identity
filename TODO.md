@@ -123,3 +123,119 @@
   - Schemas added: `identity.realme-verified`, `identity.hpi-practitioner`, `healthcare.acc-authorisation`, `healthcare.nhi-patient`
   - Routes added: `GET /auth/{provider}/metadata`, `POST /auth/{provider}/acs`
   - Registration: RealMe → DIA; Te Whatu Ora / ACC → developer portals at respective .govt.nz domains
+
+## Phase 13 — Review Findings (2026-10-25)
+Source: platform review. Reproduce each item before fixing. Several `[x]` items above are only partially wired in code (see 13.4 and 13.7 "Reconcile docs").
+
+### 13.0 Build blockers
+- [x] `oidc/oid4vci.go:256-257` — `CredentialSubject` is a struct, not a map; use `.Claims` / `.ID`
+- [x] `api/batch.go:119` — same `CredentialSubject["id"]` indexing error
+- [x] Re-run `go build ./... && go vet ./... && go test ./...` and fix any errors hidden behind the above (hidden error fixed: `randomHex` undefined in `api`, now defined in `api/server.go`)
+- [x] Dockerfile `golang:1.22-alpine` vs `go.mod` `go 1.25.0`; align Dockerfile, README badge, CLAUDE.md
+- [ ] Housekeeping: resolve LICENSE → LICENSE-MIT rename / LICENSE-APACHE (README says MIT only); delete `docs/TODO backup copy.md`, `history/`, stray TODO copies — rename and deletions of `docs/` and `TODO 1260613.md` done; `history/` (two stale TODO copies) still present, awaiting confirmation to delete
+
+### 13.1 Security — critical (account takeover / open endpoints)
+- [x] `/authorize` trusts client-supplied `X-Subject-DID` (`oidc/provider.go:76`); require authenticated session (now requires a verified bearer token; 401 otherwise; regression test `TestAuthorizeRejectsForgedSubjectHeader`)
+- [x] `POST /device/approve` unauthenticated, subject from form; `math/rand` user codes; no `slow_down` polling throttle (`oidc/device.go`)
+- [x] Magic link returns live token in response (`api/bridge.go:373`); deliver by email (pluggable sender), return 202
+- [x] Bridge flows skip `client_id`/`redirect_uri` registry validation and state-to-browser binding (`api/bridge.go`)
+- [x] Bridge state HMAC keyed by `api_key` (may be empty); use dedicated random secret
+- [ ] `auth` middleware fails open when `api_key` empty; non-constant-time compare; refuse startup without key; separate admin credential; scoped keys — fail-closed, constant-time compare, and startup refusal done (test `TestAuthFailsClosedWithEmptyAPIKey`); separate admin credential and scoped keys still pending
+- [ ] OID4VCI: any bearer token can mint platform-signed VCs; require `credential:*` scope bound to offer, validate proof + `c_nonce`, issuer must be a DID, wire pre-authorized code into `TokenHandler`
+- [x] Guardian recovery (`api/recovery.go`): unauthenticated initiate/get, shares published to event bus/audit log, approve unchecked, never completes
+- [x] Lockout never enforced (`CheckLocked` has no callers); duress passphrase unreachable (normal password checked first)
+- [x] Two event buses (`serve.go` vs `api/server.go:134`) — audit log and marketplace receive nothing; inject shared bus via `Config`
+
+### 13.2 Security — high
+- [x] Access-token verify: check `iss`, `aud`, `token_type`; reject ID tokens at `/me/*` and `/userinfo`; persist revocation list (DB) and consult it everywhere
+- [x] Token-minting oracles: `stepup.go`, `oid4vp.go:497-504`, `token_exchange.go` (client auth, reject ID token as subject token, fail on bad actor token)
+- [ ] OID4VP response endpoint: validate `state`, verify VP + nonce, bound/evict maps, persist — state validation, one-response-per-request and bounded map done; VP signature/nonce verification and persistence still open
+- [x] Dynamic client registration: auth/rate class, redirect URI validation, enforce `grant_types` + scope, SSRF-guard `backchannel_logout_uri`, call `SendBackChannelLogout`, support post-logout URIs
+- [x] Atomic auth-code redemption and refresh rotation; revoke token family on replay
+- [x] Webhooks: connect-time IP-check dialer, no redirects, https only; fix HMAC signing (currently keyed by hash of secret); don't fan out `webhook.ping`
+- [x] Never publish secrets on event bus (password-reset token, recovery shares)
+- [x] Password change/reset always 500 (interface mismatch `api/password.go:17`); key by email; atomic reset; revoke sessions on reset
+- [x] IDOR: `DELETE /api/v1/me/links/{provider}` doesn't check link ownership
+- [ ] Revocation end-to-end: `credentialStatus` on issue, persisted status list, revoke/suspend endpoints, `StatusChecker` in verify, emit `credential.revoked`, build list URL from configured issuer not `r.Host`; freshness oracle must not return `fresh:true` for `status_list_check_required`
+- [x] Enforce suspended/deleted roles in token + `/me` paths; admin delete purges refresh tokens/passwords/links
+- [ ] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); read `did_web` config
+- [ ] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
+- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go`
+- [x] `http.MaxBytesReader` on all JSON bodies; server timeouts (`ReadHeaderTimeout` etc.) + graceful shutdown
+- [ ] TOTP: require old factor to re-enrol/unenrol; replay protection; pending state before first verify
+- [ ] Consent: grant ID/subject from server not body; call `validateGrant`; unknown scope must not bypass extra-sensitive; revoke/delete check subject; `CanAccess` has no callers
+
+### 13.3 Security — medium
+- [ ] `remoteIP` in `oidc/provider.go` trusts XFF unconditionally; parse XFF right-to-left skipping trusted hops
+- [ ] `/me/export` leaks `Code`, `CodeChallenge`, `AccessToken` of sessions
+- [ ] Upstream OIDC RP: verify `iss`/`aud`/`nonce`/`email_verified`; timeouts; Ed25519 key length check; bootstrap VC only for verified email
+- [ ] Metrics: label by route pattern, not raw `r.URL.Path` (cardinality)
+- [ ] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge
+- [ ] DIDComm: anoncrypt returns spoofable sender; add replay/`exp` handling; ECDH-1PU tag in KDF; handle received messages
+- [ ] WebAuthn login finish must issue a session; check `CloneWarning`; anchored key visible in DID resolution
+- [ ] Audit log: atomic append (head read + insert), timestamp in hash, surface append errors
+- [ ] Mapper: concurrent first-login creates duplicate identities; `isNotFound` string matching
+- [ ] Admin: role filter applied after pagination; admin actions not audited
+- [ ] URL-encode `state`/`acr_values`/redirect params (`logout.go`, `provider.go:135`, `bridge.go:561`, `stepup.go`); PAR `client_id` binding; CORS `*` reflection
+- [ ] `vc.Issue`: tie `IssuerDID` to `VerificationMethodID`; `CheckStatus` panics on negative index; schema `additionalProperties`
+- [ ] `recovery.Combine` reject duplicate/zero share indices; `RecordAuthFailure` atomic + decay; `introspect` client auth
+- [ ] SQLite `MaxOpenConns(1)`: audit for nested queries inside open `rows` (deadlock)
+
+### 13.4 Wiring gaps (documented but not functional)
+- [ ] WebAuthn config (`WebAuthnRPID` etc.) never set in `serve.go`; add `webauthn` section to config + example
+- [ ] SAML / LDAP bridges never constructed in `serve.go`
+- [ ] `oidc.*_ttl` config values not read
+- [ ] `did_web` config block not read
+- [ ] Re-check credential bootstrap (`maybeIssueBootstrapVC`) after issuer-DID fix
+- [ ] `did:ion` Create not implemented (`pkg/did/ion.go:35`)
+- [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate
+- [ ] Config validation (issuer required + https, TTL parsing, unknown keys)
+- [ ] Readiness probe should check keys loaded + migrations applied
+- [ ] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery)
+
+### 13.5 Standards / production readiness
+- [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility
+- [ ] DID document update / key rotation / deactivation API
+- [ ] Persist OID4VP state and access-token revocation (replica-safe)
+- [ ] PostgreSQL store; multi-tenancy via existing `TenantID` fields
+- [ ] Scoped API keys / RBAC; admin credential separate from API key
+- [ ] Complete OIDC discovery metadata; serve `/.well-known/oauth-authorization-server` (RFC 8414)
+- [ ] `private_key_jwt` client auth, DPoP (RFC 9449), JAR (RFC 9101), RFC 9068 `at+jwt`, RFC 9207 `iss` param
+- [ ] OID4VCI: `dc+sd-jwt` format, authorization_code flow, deferred issuance, enforce `tx_code`
+- [ ] OID4VP: signed request objects, `client_id_scheme`, DCQL, `direct_post.jwt`
+- [ ] Email delivery interface (SMTP) for magic link / password reset / recovery
+- [ ] Token status list for SD-JWT VC; suspend purpose
+
+### 13.6 Test coverage
+- [ ] Tests for `internal/authn`, `internal/bridge` (+providers), `internal/events`, `internal/store`, `internal/auditlog`, `internal/resolver`
+- [ ] Tests for `pkg/recovery`, `pkg/keystore`, `pkg/pe`, `pkg/marketplace`, `cmd/`
+- [ ] Regression test per security fix (forged `X-Subject-DID` → 401; empty `api_key` → startup fails; magic-link response has no token)
+- [ ] `go test -race ./...` in CI
+
+### 13.7 Adoption & developer experience
+- [ ] `tpt-identity init` wizard — keys + valid `config.yaml` (random api_key / bridge secret) + migrate; `--profile dev|prod`
+- [ ] `tpt-identity doctor` / `config validate` / `version` with actionable errors
+- [ ] `tpt-identity serve --demo` sandbox mode (seeded issuers, schemas, fake wallet)
+- [ ] Remove enabled-by-default placeholder Google bridge from `config.yaml.example`; add missing keys (cors, trusted_proxies, consent, marketplace, webauthn)
+- [ ] Published image on GHCR via goreleaser + GitHub Actions; compose with auto-init entrypoint (no Go needed for keygen)
+- [ ] README "5-minute demo" (issue + verify via curl); fix wrong WebAuthn paths; document OID4VC/VP, device, PAR, DIDComm, admin, privacy routes; add CI badge
+- [ ] `examples/`: RP app (Go + Node, OIDC+PKCE), age-over-18 SD-JWT verifier, webhook receiver, custom-schema registration (`Source: community`, v1→v2), extra-sensitive consent demo
+- [ ] Issuer starter profiles: university (education.*), clinic/pharmacy (healthcare.*), bank KYC (finance.* + identity.*), employer (professional.employment)
+- [ ] Embedded minimal HTML pages (login, consent, device approval, wallet/admin) via `embed`
+- [ ] OpenAPI spec; Postman/Bruno collection; generated TS + Go client SDKs
+- [ ] CLI: `schemas list|show|validate|scaffold`, client registration command, `--output json|yaml`, shell completion docs
+- [ ] `.github/` (CI build/vet/test/lint, Dependabot, issue/PR templates), Makefile, `.golangci.yml`
+- [ ] CONTRIBUTING.md, CHANGELOG.md, CODE_OF_CONDUCT.md; tag v0.x release
+- [ ] Helm chart / k8s manifests
+- [ ] Docs: schema-authoring guide, ops guide (backup, key rotation, upgrades), FAQ/troubleshooting, comparison with Keycloak/Authentik, roadmap link
+- [ ] Reconcile docs with reality (README/CLAUDE.md/TODO.md claims on status lists, WebAuthn, audit log, marketplace, JWKS rotation, SAML/LDAP, back-channel logout)
+
+### 13.8 Innovation ideas
+- [ ] Policy-as-code for verifiers (declarative accept rules → Presentation Definitions; single yes/no verifier SDK)
+- [ ] Real ZK age/range proofs (BBS+ predicates) replacing issuer-computed `api/zkp.go`
+- [ ] Trust registries / signed issuer allow-lists; public marketplace directory
+- [ ] User-facing consent timeline + privacy dashboard from audit log; "who accessed what" notifications
+- [ ] Credential lifecycle automation: expiry reminders, auto-reissue via deferred issuance, CSV/SCIM import from HR/SIS
+- [ ] Audit-log head-hash anchoring to external transparency log
+- [ ] Wallet-less verification QR flow (OID4VP + redirect)
+- [ ] NZ health/gov starter pack (RealMe / Te Whatu Ora / ACC bridges + schemas + templates)
