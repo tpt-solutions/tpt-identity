@@ -324,7 +324,12 @@ func serveCmd() *cobra.Command {
 			srv.Close()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
-			return httpSrv.Shutdown(shutdownCtx)
+			// Stop taking requests first, then let in-flight webhook deliveries finish within the same budget.
+			shutdownErr := httpSrv.Shutdown(shutdownCtx)
+			if err := eventBus.Close(shutdownCtx); err != nil {
+				logger.Warn("webhook deliveries cut short at shutdown", "err", err)
+			}
+			return shutdownErr
 		},
 	}
 	return c
