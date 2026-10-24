@@ -4,6 +4,7 @@ import (
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
+	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
@@ -12,6 +13,7 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/PhillipC05/tpt-identity/internal/store"
@@ -31,6 +33,8 @@ type Provider struct {
 	signingPub ed25519.PublicKey
 	keyID      string
 	store      store.Store
+	// devicePolls records the last poll time per device_code for slow_down enforcement.
+	devicePolls sync.Map
 }
 
 // NewProvider creates an OIDC Provider.
@@ -73,10 +77,18 @@ func (p *Provider) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 	state := q.Get("state")
 	codeChallenge := q.Get("code_challenge")
 	codeChallengeMethod := q.Get("code_challenge_method")
-	subjectDID := r.Header.Get("X-Subject-DID") // set by bridge or trusted gateway
-
-	if clientID == "" || redirectURI == "" || subjectDID == "" {
+	if clientID == "" || redirectURI == "" {
 		http.Error(w, "missing required parameters", http.StatusBadRequest)
+		return
+	}
+	// The end-user must already hold a valid, signed access token. The subject is
+	// taken from that token, never from a client-supplied header.
+	subjectDID, err := p.SubjectFromBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		w.Header().Set("WWW-Authenticate", `Bearer realm="tpt-identity"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		json.NewEncoder(w).Encode(map[string]string{"error": "login_required", "error_description": "authenticated session required"})
 		return
 	}
 	// state is required to prevent CSRF.
@@ -176,7 +188,9 @@ func (p *Provider) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	sess, err := p.store.GetSessionByCode(r.Context(), code)
+	// The code is consumed atomically here, before any other check, so a code can
+	// never be redeemed twice even by concurrent requests.
+	sess, err := p.store.TakeSessionByCode(r.Context(), code)
 	if err != nil || time.Now().After(sess.ExpiresAt) {
 		writeError(w, "invalid_grant", "code not found or expired")
 		return
@@ -225,9 +239,15 @@ func (p *Provider) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Persist refresh token.
+	// Persist refresh token. It starts a new rotation family.
+	familyID, err := randomHex(16)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	rt := &store.RefreshToken{
 		Hash:       refreshHash,
+		FamilyID:   familyID,
 		SubjectDID: sess.SubjectDID,
 		ClientID:   sess.ClientID,
 		Scope:      sess.Scope,
@@ -238,9 +258,6 @@ func (p *Provider) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-
-	// Invalidate the used code.
-	_ = p.store.DeleteSession(r.Context(), sess.ID)
 
 	writeTokenResponse(w, accessToken, idToken, rawRefresh, sess.Scope, accessTokenTTL)
 }
@@ -263,8 +280,9 @@ func (p *Provider) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 		writeError(w, "invalid_grant", "refresh token expired")
 		return
 	}
-	// Detect replay of an already-consumed token (theft indicator).
+	// Replay of a rotated token indicates theft: end the whole rotation family.
 	if rt.UsedAt != nil {
+		_ = p.store.DeleteRefreshTokenFamily(r.Context(), rt.FamilyID)
 		_ = p.store.DeleteRefreshToken(r.Context(), hash)
 		writeError(w, "invalid_grant", "refresh token already used")
 		return
@@ -276,10 +294,17 @@ func (p *Provider) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Mark old token as used (keep briefly for theft detection, then GC).
-	now := time.Now()
-	rt.UsedAt = &now
-	_ = p.store.SaveRefreshToken(r.Context(), rt)
+	// Claim the token atomically. If a concurrent request claimed it first, that is a replay.
+	claimed, err := p.store.MarkRefreshTokenUsed(r.Context(), hash, time.Now())
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	if !claimed {
+		_ = p.store.DeleteRefreshTokenFamily(r.Context(), rt.FamilyID)
+		writeError(w, "invalid_grant", "refresh token already used")
+		return
+	}
 
 	// Issue new tokens.
 	accessToken, err := IssueAccessToken(p.issuer, rt.SubjectDID, rt.ClientID, accessTokenTTL, p.signingKey, p.keyID)
@@ -294,6 +319,7 @@ func (p *Provider) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 	}
 	newRT := &store.RefreshToken{
 		Hash:       refreshHash,
+		FamilyID:   rt.FamilyID,
 		SubjectDID: rt.SubjectDID,
 		ClientID:   rt.ClientID,
 		Scope:      rt.Scope,
@@ -362,7 +388,7 @@ func (p *Provider) UserinfoHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unauthorized", http.StatusUnauthorized)
 		return
 	}
-	claims, err := Verify(bearer, p.signingPub)
+	claims, err := p.VerifyAccessToken(r.Context(), bearer)
 	if err != nil {
 		http.Error(w, "invalid token: "+err.Error(), http.StatusUnauthorized)
 		return
@@ -401,17 +427,50 @@ func (p *Provider) IssueSessionForDIDCtx(r *http.Request, subjectDID, clientID, 
 	return code, p.store.SaveSession(r.Context(), sess)
 }
 
-// SubjectFromBearer extracts and verifies the subject DID from a Bearer token.
+// SubjectFromBearer extracts and verifies the subject DID from a Bearer access token.
 func (p *Provider) SubjectFromBearer(authHeader string) (string, error) {
 	bearer := strings.TrimPrefix(authHeader, "Bearer ")
 	if bearer == "" {
 		return "", fmt.Errorf("no bearer token")
 	}
-	claims, err := Verify(bearer, p.signingPub)
+	claims, err := p.VerifyAccessToken(context.Background(), bearer)
 	if err != nil {
 		return "", err
 	}
 	return claims.Subject, nil
+}
+
+// VerifyAccessToken validates a platform-issued access token for use against the API.
+// It checks the signature, issuer, expiry, token_type, presence of an audience and the
+// persistent revocation list. ID tokens are rejected, even though they are signed by
+// the same key.
+func (p *Provider) VerifyAccessToken(ctx context.Context, token string) (*Claims, error) {
+	claims, err := Verify(token, p.signingPub)
+	if err != nil {
+		return nil, err
+	}
+	if claims.Issuer != p.issuer {
+		return nil, fmt.Errorf("jwt: issuer mismatch")
+	}
+	if claims.TokenType != "access" {
+		return nil, fmt.Errorf("jwt: not an access token")
+	}
+	if claims.Audience == "" {
+		return nil, fmt.Errorf("jwt: missing audience")
+	}
+	if p.isAccessTokenRevoked(ctx, token) {
+		return nil, fmt.Errorf("jwt: token revoked")
+	}
+	// Suspended and deleted identities lose API access at once, even with an unexpired
+	// token. A lookup error also denies access.
+	id, err := p.store.GetIdentity(ctx, claims.Subject)
+	if err != nil {
+		return nil, fmt.Errorf("jwt: subject not found")
+	}
+	if id.Role == "suspended" || id.Role == "deleted" {
+		return nil, fmt.Errorf("jwt: subject is not active")
+	}
+	return claims, nil
 }
 
 // validateClientAuth checks the client secret for confidential clients.
@@ -499,8 +558,12 @@ func remoteIP(r *http.Request) string {
 }
 
 func writeError(w http.ResponseWriter, code, desc string) {
+	writeErrorStatus(w, http.StatusBadRequest, code, desc)
+}
+
+func writeErrorStatus(w http.ResponseWriter, status int, code, desc string) {
 	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusBadRequest)
+	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": desc})
 }
 

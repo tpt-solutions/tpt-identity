@@ -3,6 +3,7 @@ package oidc
 import (
 	"encoding/json"
 	"net/http"
+	"net/url"
 	"strings"
 )
 
@@ -36,7 +37,7 @@ func (p *Provider) StepUpHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	currentClaims, err := Verify(bearer, p.signingPub)
+	currentClaims, err := p.VerifyAccessToken(r.Context(), bearer)
 	if err != nil {
 		writeError(w, "invalid_token", "access_token invalid: "+err.Error())
 		return
@@ -73,9 +74,9 @@ func (p *Provider) StepUpHandler(w http.ResponseWriter, r *http.Request) {
 	// Not satisfied — return a challenge directing the client to re-authenticate.
 	// The client should redirect the user to /authorize with acr_values appended.
 	nonce := r.URL.Query().Get("nonce")
-	authorizeURL := p.issuer + "/authorize?response_type=code&acr_values=" + requiredACR
+	authorizeURL := p.issuer + "/authorize?response_type=code&acr_values=" + url.QueryEscape(requiredACR)
 	if nonce != "" {
-		authorizeURL += "&nonce=" + nonce
+		authorizeURL += "&nonce=" + url.QueryEscape(nonce)
 	}
 
 	w.Header().Set("Content-Type", "application/json")

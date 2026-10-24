@@ -47,25 +47,33 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Verify the subject token.
-	claims, err := Verify(subjectToken, p.signingPub)
-	if err != nil {
-		writeError(w, "invalid_request", "subject_token invalid: "+err.Error())
-		return
-	}
-
-	// Authenticate the calling client.
+	// Authenticate the calling client. Exchange is never anonymous.
 	callerClientID := ""
 	if user, _, ok := r.BasicAuth(); ok {
 		callerClientID = user
 	} else if id := r.FormValue("client_id"); id != "" {
 		callerClientID = id
 	}
-	if callerClientID != "" {
-		if err := p.validateClientAuth(r, callerClientID); err != nil {
-			writeError(w, "invalid_client", err.Error())
-			return
-		}
+	if callerClientID == "" {
+		writeError(w, "invalid_client", "client authentication required for token exchange")
+		return
+	}
+	if err := p.validateClientAuth(r, callerClientID); err != nil {
+		writeError(w, "invalid_client", err.Error())
+		return
+	}
+
+	// The subject token must be a live platform access token (not an ID token, not revoked).
+	claims, err := p.VerifyAccessToken(r.Context(), subjectToken)
+	if err != nil {
+		writeError(w, "invalid_request", "subject_token invalid: "+err.Error())
+		return
+	}
+	// A client may only exchange tokens that were issued to it. This stops one client
+	// from turning another client's token into a token for itself.
+	if claims.Audience != callerClientID {
+		writeError(w, "invalid_grant", "subject_token was not issued to this client")
+		return
 	}
 
 	// Scope: use requested_scope if a subset, otherwise carry subject token scope.
@@ -78,9 +86,12 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		effectiveScope = requestedScope
 	}
 
-	if audience == "" {
-		audience = p.issuer
+	// The audience is pinned to the calling client; any other value is refused.
+	if audience != "" && audience != callerClientID {
+		writeError(w, "invalid_target", "audience must be the calling client")
+		return
 	}
+	audience = callerClientID
 
 	// Build extra claims for the new token.
 	extra := map[string]any{
@@ -90,13 +101,15 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		extra["scope"] = effectiveScope
 	}
 
-	// Record the actor (the service making the exchange).
+	// Record the actor. A supplied actor_token must verify; it is never silently dropped.
 	if actorToken != "" {
-		actClaims, actErr := Verify(actorToken, p.signingPub)
-		if actErr == nil {
-			extra["act"] = map[string]string{"sub": actClaims.Subject}
+		actClaims, actErr := p.VerifyAccessToken(r.Context(), actorToken)
+		if actErr != nil {
+			writeError(w, "invalid_request", "actor_token invalid: "+actErr.Error())
+			return
 		}
-	} else if callerClientID != "" {
+		extra["act"] = map[string]string{"sub": actClaims.Subject}
+	} else {
 		extra["act"] = map[string]string{"sub": callerClientID}
 	}
 

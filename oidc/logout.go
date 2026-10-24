@@ -1,7 +1,9 @@
 package oidc
 
 import (
+	"context"
 	"net/http"
+	"slices"
 	"strings"
 )
 
@@ -20,35 +22,47 @@ func (p *Provider) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	postLogoutURI := q.Get("post_logout_redirect_uri")
 	state := q.Get("state")
 
-	var subjectDID string
+	var subjectDID, hintClientID string
 	if idTokenHint != "" {
+		// An ID token hint is verified (signature, issuer, expiry); its audience names the
+		// client that the logout is for.
 		claims, err := Verify(idTokenHint, p.signingPub)
-		if err == nil {
+		if err == nil && claims.Issuer == p.issuer && claims.TokenType == "id" {
 			subjectDID = claims.Subject
+			hintClientID = claims.Audience
 		}
 	}
 
 	if subjectDID != "" {
-		// Revoke all sessions and refresh tokens for this subject.
+		// Revoke all sessions and refresh tokens for this subject, and notify each
+		// client that held one of them.
 		sessions, err := p.store.ListSessionsBySubject(r.Context(), subjectDID)
 		if err == nil {
+			notified := map[string]bool{}
 			for _, sess := range sessions {
 				if sess.RefreshTokenHash != "" {
+					if rt, rtErr := p.store.GetRefreshToken(r.Context(), sess.RefreshTokenHash); rtErr == nil {
+						_ = p.store.DeleteRefreshTokenFamily(r.Context(), rt.FamilyID)
+					}
 					_ = p.store.DeleteRefreshToken(r.Context(), sess.RefreshTokenHash)
 				}
 				_ = p.store.DeleteSession(r.Context(), sess.ID)
+				if !notified[sess.ClientID] {
+					notified[sess.ClientID] = true
+					p.notifyBackChannel(sess.ClientID, subjectDID)
+				}
 			}
 		}
 		// Revoke all loose refresh tokens not attached to a session.
 		_ = p.store.PurgeExpiredSessions(r.Context())
 	}
 
-	// Validate post_logout_redirect_uri: only allow if registered for the client.
-	// Without a verified id_token_hint we can still redirect to a registered URI
-	// but we cannot know which client — so we skip the registration check in that case.
+	// Validate post_logout_redirect_uri against the registration of the client named in
+	// the ID token hint. Without a verified hint there is no client to check against, so
+	// the request falls back to the issuer root.
 	target := p.issuer
 	if postLogoutURI != "" {
-		if subjectDID != "" && p.isRegisteredLogoutURI(r, postLogoutURI) {
+		if subjectDID != "" && p.isRegisteredLogoutURI(r, hintClientID, postLogoutURI) {
 			target = postLogoutURI
 		} else if subjectDID == "" {
 			// Unauthenticated logout request with redirect — just go to issuer root.
@@ -66,20 +80,24 @@ func (p *Provider) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, target, http.StatusFound)
 }
 
-// isRegisteredLogoutURI returns true if postLogoutURI appears in any registered client's
-// post_logout_redirect_uris. We iterate all clients for simplicity; a production
-// deployment with thousands of clients should index this separately.
-func (p *Provider) isRegisteredLogoutURI(r *http.Request, uri string) bool {
-	clients, err := p.store.ListClients(r.Context())
+// isRegisteredLogoutURI reports whether uri is one of clientID's registered
+// post_logout_redirect_uris. Other clients' registrations do not count.
+func (p *Provider) isRegisteredLogoutURI(r *http.Request, clientID, uri string) bool {
+	if clientID == "" {
+		return false
+	}
+	client, err := p.store.GetClient(r.Context(), clientID)
 	if err != nil {
 		return false
 	}
-	for _, c := range clients {
-		for _, u := range c.PostLogoutRedirectURIs {
-			if u == uri {
-				return true
-			}
-		}
-	}
-	return false
+	return slices.Contains(client.PostLogoutRedirectURIs, uri)
+}
+
+// notifyBackChannel sends back-channel logout to clientID without blocking the logout
+// response. Delivery failures are not surfaced to the user; the client can rely on its
+// own session expiry.
+func (p *Provider) notifyBackChannel(clientID, subjectDID string) {
+	go func() {
+		_ = p.SendBackChannelLogout(context.Background(), clientID, subjectDID)
+	}()
 }

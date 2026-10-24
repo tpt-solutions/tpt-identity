@@ -41,6 +41,9 @@ type OID4VPResponse struct {
 	Error      string    `json:"error,omitempty"`
 }
 
+// maxOID4VPResponses bounds the response map so unauthenticated posts cannot grow it without limit.
+const maxOID4VPResponses = 10000
+
 // OID4VPStore is an in-memory store for OID4VP requests and responses.
 // In production this should be backed by the persistent store; for now
 // in-memory is sufficient for the request/response round-trip TTL.
@@ -183,6 +186,9 @@ func (h *OID4VPHandler) GetRequestHandler(w http.ResponseWriter, r *http.Request
 		"state":                   pReq.ID, // state = request ID for correlation
 	}
 
+	// token_type is distinct from "access" so the request object can never be presented
+	// as a bearer token to the API.
+	obj["token_type"] = "oid4vp_request"
 	reqJWT, err := issueJWTWithExtra(h.p.issuer, pReq.ClientID, h.p.issuer,
 		time.Until(pReq.ExpiresAt), h.p.signingKey, h.p.keyID, obj)
 	if err != nil {
@@ -220,7 +226,23 @@ func (h *OID4VPHandler) PostResponseHandler(w http.ResponseWriter, r *http.Reque
 		ReceivedAt: time.Now(),
 	}
 
+	// The state must correspond to a live request, and each request accepts one response.
 	h.store.mu.Lock()
+	pReq, known := h.store.requests[state]
+	switch {
+	case !known || time.Now().After(pReq.ExpiresAt):
+		h.store.mu.Unlock()
+		writeError(w, "invalid_request", "unknown or expired request state")
+		return
+	case h.store.responses[state] != nil:
+		h.store.mu.Unlock()
+		writeErrorStatus(w, http.StatusConflict, "invalid_request", "a response was already received for this request")
+		return
+	case len(h.store.responses) >= maxOID4VPResponses:
+		h.store.mu.Unlock()
+		writeErrorStatus(w, http.StatusServiceUnavailable, "temporarily_unavailable", "too many pending responses")
+		return
+	}
 	h.store.responses[state] = resp
 	h.store.mu.Unlock()
 

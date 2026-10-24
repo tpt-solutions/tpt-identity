@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -205,7 +206,7 @@ func (p *Provider) CredentialHandler(signingKey ed25519.PrivateKey, signingKeyID
 			writeError(w, "invalid_token", "Bearer token required")
 			return
 		}
-		claims, err := Verify(bearer, p.signingPub)
+		claims, err := p.VerifyAccessToken(r.Context(), bearer)
 		if err != nil {
 			writeError(w, "invalid_token", err.Error())
 			return
@@ -235,8 +236,9 @@ func (p *Provider) CredentialHandler(signingKey ed25519.PrivateKey, signingKeyID
 			return
 		}
 
-		// Confirm the token scope covers this credential type.
-		if claims.Scope != "" && !strings.Contains(claims.Scope, "credential:"+schemaID) {
+		// The token must carry an explicit credential:<schema> scope for this type. Ordinary
+		// user access tokens have no credential scope and must not mint credentials.
+		if !hasScopeToken(claims.Scope, "credential:"+schemaID) {
 			writeError(w, "insufficient_scope", "token scope does not cover credential:"+schemaID)
 			return
 		}
@@ -253,10 +255,8 @@ func (p *Provider) CredentialHandler(signingKey ed25519.PrivateKey, signingKeyID
 			"id": subjectDID,
 		}
 		for _, c := range creds {
-			if c.CredentialSubject != nil {
-				for k, v := range c.CredentialSubject {
-					credClaims[k] = v
-				}
+			for k, v := range c.CredentialSubject.Claims {
+				credClaims[k] = v
 			}
 		}
 
@@ -303,6 +303,11 @@ func (p *Provider) CredentialHandler(signingKey ed25519.PrivateKey, signingKeyID
 type oid4vciProof struct {
 	ProofType string `json:"proof_type"` // "jwt"
 	JWT       string `json:"jwt"`
+}
+
+// hasScopeToken reports whether want appears as a whole token in a space-delimited scope string.
+func hasScopeToken(scope, want string) bool {
+	return slices.Contains(strings.Fields(scope), want)
 }
 
 func mustRandomHex(n int) string {

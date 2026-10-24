@@ -1,43 +1,22 @@
 package oidc
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
-	"sync"
 	"time"
 )
 
-// RevokedAccessToken tracks revoked access tokens until their natural expiry.
-// In production this should be stored in Redis or the DB; the in-memory store
-// here is suitable for single-instance deployments.
-type revokedToken struct {
-	expiresAt time.Time
-}
-
-var (
-	revokedMu     sync.RWMutex
-	revokedTokens = map[string]revokedToken{}
-)
-
-// IsAccessTokenRevoked reports whether the given access token has been revoked.
-func IsAccessTokenRevoked(token string) bool {
-	h := hashTokenValue(token)
-	revokedMu.RLock()
-	e, ok := revokedTokens[h]
-	revokedMu.RUnlock()
-	if !ok {
-		return false
+// isAccessTokenRevoked reports whether token is on the persistent revocation list.
+// A store error is treated as revoked: when the list cannot be read, reject the token.
+func (p *Provider) isAccessTokenRevoked(ctx context.Context, token string) bool {
+	revoked, err := p.store.IsAccessTokenRevoked(ctx, hashTokenValue(token))
+	if err != nil {
+		return true
 	}
-	if time.Now().After(e.expiresAt) {
-		// Lazily clean up.
-		revokedMu.Lock()
-		delete(revokedTokens, h)
-		revokedMu.Unlock()
-		return false
-	}
-	return true
+	return revoked
 }
 
 // RevokeHandler handles POST /oidc/revoke (RFC 7009).
@@ -89,10 +68,10 @@ func (p *Provider) RevokeHandler(w http.ResponseWriter, r *http.Request) {
 		if err == nil {
 			expiry := time.Unix(claims.ExpiresAt, 0)
 			if time.Now().Before(expiry) {
-				h := hashTokenValue(token)
-				revokedMu.Lock()
-				revokedTokens[h] = revokedToken{expiresAt: expiry}
-				revokedMu.Unlock()
+				if err := p.store.RevokeAccessToken(r.Context(), hashTokenValue(token), expiry); err != nil {
+					http.Error(w, "internal error", http.StatusInternalServerError)
+					return
+				}
 			}
 		}
 	}

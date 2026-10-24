@@ -43,7 +43,7 @@ func (p *Provider) IntrospectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check if token has been explicitly revoked.
-	if IsAccessTokenRevoked(token) {
+	if p.isAccessTokenRevoked(r.Context(), token) {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(inactive)
 		return

@@ -1,13 +1,19 @@
 package oidc_test
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
+	"github.com/PhillipC05/tpt-identity/internal/store"
 	"github.com/PhillipC05/tpt-identity/oidc"
+	"github.com/PhillipC05/tpt-identity/pkg/crypto"
 )
 
 // ---- JWT issuance + verification ----
@@ -123,14 +129,82 @@ func TestPKCES256Math(t *testing.T) {
 
 // ---- Token revocation ----
 
-func TestIsAccessTokenRevokedReturnsFalseInitially(t *testing.T) {
-	_, privKey, _ := crypto.GenerateSigningKey()
-	token, _ := oidc.IssueAccessToken(
-		"https://issuer.example.com", "did:peer:sub", "client-1",
-		time.Hour, privKey, "key-1",
-	)
-	if oidc.IsAccessTokenRevoked(token) {
-		t.Error("freshly issued token should not be revoked")
+const revIssuer = "https://issuer.example.com"
+
+// newRevocationProvider returns a provider over an in-memory store plus a token it issued.
+func newRevocationProvider(t *testing.T) (*oidc.Provider, string) {
+	t.Helper()
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, priv, _ := crypto.GenerateSigningKey()
+	saveTestIdentity(t, st, "did:peer:sub")
+	p := oidc.NewProvider(revIssuer, priv, "key-1", st)
+	token, err := oidc.IssueAccessToken(revIssuer, "did:peer:sub", "client-1", time.Hour, priv, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return p, token
+}
+
+func TestVerifyAccessTokenAcceptsFreshToken(t *testing.T) {
+	p, token := newRevocationProvider(t)
+	if _, err := p.VerifyAccessToken(context.Background(), token); err != nil {
+		t.Errorf("fresh access token rejected: %v", err)
+	}
+}
+
+// Revoking through /oidc/revoke must make VerifyAccessToken reject the token.
+func TestRevokedAccessTokenRejected(t *testing.T) {
+	p, token := newRevocationProvider(t)
+	form := url.Values{"token": {token}, "token_type_hint": {"access_token"}}
+	r := httptest.NewRequest(http.MethodPost, "/oidc/revoke", strings.NewReader(form.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	p.RevokeHandler(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("revoke: want 200, got %d", w.Code)
+	}
+	if _, err := p.VerifyAccessToken(context.Background(), token); err == nil {
+		t.Error("revoked access token still accepted")
+	}
+}
+
+// ID tokens are signed by the same key but must not authenticate API calls.
+func TestVerifyAccessTokenRejectsIDToken(t *testing.T) {
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, priv, _ := crypto.GenerateSigningKey()
+	p := oidc.NewProvider(revIssuer, priv, "key-1", st)
+	idTok, err := oidc.IssueIDToken(revIssuer, "did:peer:sub", "client-1", "n", time.Hour, priv, nil, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.VerifyAccessToken(context.Background(), idTok); err == nil {
+		t.Error("ID token accepted as an access token")
+	}
+}
+
+// A token minted by a different issuer, even with a valid signature, is rejected.
+func TestVerifyAccessTokenRejectsWrongIssuer(t *testing.T) {
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, priv, _ := crypto.GenerateSigningKey()
+	p := oidc.NewProvider(revIssuer, priv, "key-1", st)
+	tok, err := oidc.IssueAccessToken("https://other.example.com", "did:peer:sub", "client-1", time.Hour, priv, "key-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.VerifyAccessToken(context.Background(), tok); err == nil {
+		t.Error("token from another issuer accepted")
 	}
 }
 
@@ -140,5 +214,16 @@ func TestRegisterClientRequestZeroValue(t *testing.T) {
 	var req oidc.RegisterClientRequest
 	if req.ClientName != "" {
 		t.Error("expected zero-value client name")
+	}
+}
+
+// saveTestIdentity creates an active identity row so token verification accepts the subject.
+func saveTestIdentity(t *testing.T, st store.Store, did string) {
+	t.Helper()
+	now := time.Now()
+	if err := st.SaveIdentity(context.Background(), &store.Identity{
+		DID: did, Method: "peer", Role: "user", CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("save identity %s: %v", did, err)
 	}
 }

@@ -7,6 +7,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/PhillipC05/tpt-identity/internal/netguard"
 )
 
 // SendBackChannelLogout delivers a signed logout_token to the client's
@@ -41,7 +43,7 @@ func (p *Provider) SendBackChannelLogout(ctx context.Context, clientID, subjectD
 	}
 
 	formBody := url.Values{"logout_token": {logoutToken}}.Encode()
-	hc := &http.Client{Timeout: 5 * time.Second}
+	hc := netguard.Client(5 * time.Second)
 	var lastErr error
 	for attempt := 0; attempt < 3; attempt++ {
 		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost,

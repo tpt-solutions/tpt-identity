@@ -1,9 +1,9 @@
 package oidc
 
 import (
+	"crypto/rand"
 	"encoding/json"
 	"fmt"
-	"math/rand"
 	"net/http"
 	"strings"
 	"time"
@@ -100,24 +100,31 @@ func (p *Provider) DeviceVerifyHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 // DeviceApproveHandler handles POST /device/approve — called by the authorisation
-// UI after the user has authenticated. It sets the subject DID on the device code.
-// In production this would be called by the bridge after authenticating the user;
-// for now it accepts a pre-authenticated subject_did from a trusted gateway header.
+// UI once the end-user is signed in. The approving subject is taken from the
+// caller's verified bearer token; a form-supplied subject is never trusted.
 func (p *Provider) DeviceApproveHandler(w http.ResponseWriter, r *http.Request) {
+	subjectDID, err := p.SubjectFromBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		writeErrorStatus(w, http.StatusUnauthorized, "login_required", "authenticated session required")
+		return
+	}
 	if err := r.ParseForm(); err != nil {
 		writeError(w, "invalid_request", "could not parse form")
 		return
 	}
 	userCode := strings.ToUpper(r.FormValue("user_code"))
-	subjectDID := r.FormValue("subject_did")
-	if userCode == "" || subjectDID == "" {
-		writeError(w, "invalid_request", "user_code and subject_did required")
+	if userCode == "" {
+		writeError(w, "invalid_request", "user_code required")
 		return
 	}
 
 	dc, err := p.store.GetDeviceCodeByUserCode(r.Context(), userCode)
 	if err != nil || time.Now().After(dc.ExpiresAt) {
 		writeError(w, "invalid_request", "user_code not found or expired")
+		return
+	}
+	if dc.Approved || dc.Denied {
+		writeError(w, "invalid_request", "device request already decided")
 		return
 	}
 	dc.SubjectDID = subjectDID
@@ -159,6 +166,14 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !dc.Approved {
+		// RFC 8628 §3.5: polling faster than the interval must back off with slow_down.
+		now := time.Now()
+		last, polled := p.devicePolls.Load(deviceCode)
+		p.devicePolls.Store(deviceCode, now)
+		if polled && now.Sub(last.(time.Time)) < time.Duration(dc.IntervalSecs)*time.Second {
+			writeError(w, "slow_down", "polling too fast; increase the interval")
+			return
+		}
 		// RFC 8628 §3.5: return authorization_pending until approved or expired.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
@@ -180,8 +195,14 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	familyID, err := randomHex(16)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
 	rt := &store.RefreshToken{
 		Hash:       refreshHash,
+		FamilyID:   familyID,
 		SubjectDID: dc.SubjectDID,
 		ClientID:   dc.ClientID,
 		Scope:      dc.Scope,
@@ -193,16 +214,20 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_ = p.store.DeleteDeviceCode(r.Context(), deviceCode) // single-use
+	p.devicePolls.Delete(deviceCode)
 	writeTokenResponse(w, accessToken, "", rawRefresh, dc.Scope, accessTokenTTL)
 }
 
 // generateUserCode returns a memorable 8-character user code in XXXX-XXXX format.
 // Uses only unambiguous uppercase letters (no I, O, 0, 1 confusion).
 func generateUserCode() string {
-	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+	const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // 32 symbols: a byte mod 32 is unbiased
 	b := make([]byte, 8)
+	if _, err := rand.Read(b); err != nil {
+		panic("oidc: crypto/rand unavailable: " + err.Error())
+	}
 	for i := range b {
-		b[i] = chars[rand.Intn(len(chars))]
+		b[i] = chars[int(b[i])%len(chars)]
 	}
 	return string(b[:4]) + "-" + string(b[4:])
 }
