@@ -151,7 +151,7 @@ func (s *Server) handleSubmitPresentation(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	verifier := vc.NewVerifier(s.resolver)
+	verifier := vc.NewVerifier(s.resolver).WithStatusChecker(s.statusChecker())
 	if err := verifier.VerifyPresentation(&body.Presentation, vc.VerifyPresentationOptions{
 		ExpectedChallenge: req.Nonce,
 		ExpectedDomain:    req.Domain,

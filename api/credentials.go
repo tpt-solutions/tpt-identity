@@ -62,6 +62,16 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 		StatusListCredential: req.StatusListCredential,
 		StatusListIndex:      req.StatusListIndex,
 	}
+	// Every credential this server issues gets a revocation entry, unless the caller names its own list.
+	if opts.StatusListCredential == "" && issuerDID == s.platformDID {
+		listURL, idx, err := s.allocateStatus(r.Context())
+		if err != nil {
+			http.Error(w, "status entry: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		opts.StatusListCredential = listURL
+		opts.StatusListIndex = idx
+	}
 	cred, err := vc.Issue(opts)
 	if err != nil {
 		http.Error(w, "issue: "+err.Error(), http.StatusBadRequest)
@@ -91,7 +101,7 @@ func (s *Server) handleVerifyCredential(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
-	verifier := vc.NewVerifier(s.resolver)
+	verifier := vc.NewVerifier(s.resolver).WithStatusChecker(s.statusChecker())
 	if err := verifier.Verify(&cred); err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)

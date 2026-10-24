@@ -2192,6 +2192,23 @@ paths:
           $ref: "#/components/responses/NotFound"
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /api/v1/credentials/{id}/revoke:
+    post:
+      tags: [Credentials]
+      operationId: revokeCredential
+      summary: Revoke a credential by setting its bit in the issuer's status list
+      description: Republishes the status list. Revoking twice is harmless. The credential must carry a status entry hosted by this issuer.
+      parameters:
+        - $ref: "#/components/parameters/Id"
+      responses:
+        "204":
+          description: Revoked.
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The credential has no status entry, or its list is not hosted by this issuer.
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /api/v1/credentials/zkp/age:
     post:
       tags: [Credentials]

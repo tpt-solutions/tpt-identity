@@ -36,7 +36,7 @@ func newScopedTestServer(t *testing.T) *api.Server {
 		ScopedKeys:   []api.ScopedKey{{Name: "hooks", Key: testWebhookKey, Scopes: []string{"webhooks"}}},
 		Issuer:       testIssuer,
 		SigningKey:   priv,
-		SigningKeyID: testIssuer + "#signing-key-1",
+		SigningKeyID: testPlatformDID + "#signing-key-1", // the issuing key must belong to the platform DID
 		Store:        st,
 		Resolver:     resolver.New(5 * time.Minute),
 		OIDC:         oidc.NewProvider(testIssuer, priv, "test-key-1", st),

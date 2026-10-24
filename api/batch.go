@@ -2,6 +2,7 @@ package api
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"time"
 
@@ -69,6 +70,16 @@ func (s *Server) handleBatchIssueCredentials(w http.ResponseWriter, r *http.Requ
 			StatusListIndex:      req.StatusListIndex,
 		}
 
+		if opts.StatusListCredential == "" && issuerDID == s.platformDID {
+			listURL, idx, err := s.allocateStatus(r.Context())
+			if err != nil {
+				results[i] = result{Error: "status entry: " + err.Error()}
+				continue
+			}
+			opts.StatusListCredential = listURL
+			opts.StatusListIndex = idx
+		}
+
 		cred, err := vc.Issue(opts)
 		if err != nil {
 			results[i] = result{Error: err.Error()}
@@ -108,11 +119,17 @@ func (s *Server) handleCredentialFreshness(w http.ResponseWriter, r *http.Reques
 		reason = "expired"
 	}
 
-	// Check revocation status from CredentialStatus if present.
-	if cred.CredentialStatus != nil {
-		// A status list check would require fetching the status list VC.
-		// For now we report the locally-known status.
-		reason = "status_list_check_required"
+	// A credential with a status entry is fresh only when its list says so. A list that cannot be
+	// checked is reported as not fresh, never as fresh by default.
+	if cred.CredentialStatus != nil && fresh {
+		switch err := s.statusChecker()(cred.CredentialStatus); {
+		case errors.Is(err, vc.ErrCredentialRevoked):
+			fresh = false
+			reason = "revoked"
+		case err != nil:
+			fresh = false
+			reason = "status_unverified"
+		}
 	}
 
 	response := map[string]any{

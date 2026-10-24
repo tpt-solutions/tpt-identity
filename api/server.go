@@ -23,6 +23,7 @@ import (
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 	"github.com/tpt-solutions/tpt-identity/pkg/marketplace"
 )
 
@@ -268,6 +269,14 @@ func NewServer(cfg Config) *Server {
 		WebhookDeliveriesTotal.WithLabelValues(result).Inc()
 	})
 
+	// The platform's own DID document is known locally. Pin it, so verifying a credential the platform
+	// issued never fetches its own document over the network.
+	if s.resolver != nil && s.platformDID != "" && len(s.platformDIDDoc) > 0 {
+		var doc did.Document
+		if err := json.Unmarshal(s.platformDIDDoc, &doc); err == nil {
+			s.resolver.Pin(s.platformDID, &doc)
+		}
+	}
 	// Session IPs recorded by the OIDC provider honour the same trusted proxies as the API.
 	if s.oidc != nil {
 		s.oidc.SetTrustedProxies(trustedNets)
@@ -386,6 +395,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/credentials/{id}/fresh", s.wrap(s.rateLimit(s.audit(s.handleCredentialFreshness))))
 	// ZKP — derived age-over proof (issuer-computed, no ZK-SNARK)
 	s.mux.HandleFunc("POST /api/v1/credentials/zkp/age", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleIssueAgeProof)))))
+	// Revocation: sets the credential's bit in its status list.
+	s.mux.HandleFunc("POST /api/v1/credentials/{id}/revoke", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleRevokeCredential)))))
 	s.mux.HandleFunc("GET /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleListGrants))))
 	s.mux.HandleFunc("POST /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleCreateGrant))))
 	s.mux.HandleFunc("DELETE /api/v1/consents/grants/{id}", s.wrap(s.rateLimit(s.audit(s.handleRevokeGrant))))

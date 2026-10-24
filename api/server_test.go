@@ -19,6 +19,8 @@ import (
 const (
 	testAPIKey = "test-api-key-1234"
 	testIssuer = "https://test.tpt-identity.example"
+	// testPlatformDID is the did:web the test issuer resolves to; issuing keys must be its keys.
+	testPlatformDID = "did:web:test.tpt-identity.example"
 )
 
 // newTestServer wires a Server against an in-memory SQLite store with a fresh Ed25519 key.
@@ -41,7 +43,7 @@ func newTestServer(t *testing.T) *api.Server {
 		APIKey:       testAPIKey,
 		Issuer:       testIssuer,
 		SigningKey:   priv,
-		SigningKeyID: testIssuer + "#signing-key-1",
+		SigningKeyID: testPlatformDID + "#signing-key-1", // the issuing key must belong to the platform DID
 		Store:        st,
 		Resolver:     res,
 		OIDC:         oidcProvider,

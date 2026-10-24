@@ -8,6 +8,9 @@ import (
 // handleStatusList serves GET /api/v1/status/{listId}.
 // Returns the BitstringStatusListCredential VC as JSON.
 // Verifiers fetch this to check whether a specific credential has been revoked.
+//
+// The list's identity comes from the configured issuer, never from the request's Host header:
+// a forged Host must not change which list is served.
 func (s *Server) handleStatusList(w http.ResponseWriter, r *http.Request) {
 	listID := r.PathValue("listId")
 	if listID == "" {
@@ -15,15 +18,7 @@ func (s *Server) handleStatusList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The status list VC is stored as a regular credential with the full URL as its ID.
-	// Convention: stored under id = <issuer>/api/v1/status/<listId>
-	scheme := "https"
-	if r.TLS == nil {
-		scheme = "http"
-	}
-	credID := scheme + "://" + r.Host + "/api/v1/status/" + listID
-
-	cred, err := s.store.GetCredential(r.Context(), credID)
+	cred, err := s.store.GetCredential(r.Context(), s.issuer+statusListPath+listID)
 	if err != nil {
 		http.Error(w, "status list not found", http.StatusNotFound)
 		return
