@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
@@ -1097,13 +1098,33 @@ const (
 	lockThreshold3 = 20 // permanent (admin reset required)
 )
 
+// authFailureDecay is how long a quiet period resets the failure counter. A lock already in force
+// is never shortened by a later failure.
+const authFailureDecay = 24 * time.Hour
+
+// RecordAuthFailure increments the failure counter for subjectOrEmail and sets the lockout window.
+// The read and the write run in one transaction, so concurrent failures are all counted.
 func (s *SQLiteStore) RecordAuthFailure(ctx context.Context, subjectOrEmail string) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	now := time.Now()
-	var lockedUntil *time.Time
 	var count int
-	row := s.db.QueryRowContext(ctx, `SELECT count FROM auth_failures WHERE subject_or_email=?`, subjectOrEmail)
-	_ = row.Scan(&count)
+	var lastFailure, existingLock sql.NullTime
+	err = tx.QueryRowContext(ctx, `SELECT count, last_failure_at, locked_until FROM auth_failures WHERE subject_or_email=?`, subjectOrEmail).
+		Scan(&count, &lastFailure, &existingLock)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return err
+	}
+	if lastFailure.Valid && now.Sub(lastFailure.Time) > authFailureDecay {
+		count = 0
+	}
 	count++
+
+	var lockedUntil *time.Time
 	switch {
 	case count >= lockThreshold3:
 		// permanent lock — set far future
@@ -1116,11 +1137,18 @@ func (s *SQLiteStore) RecordAuthFailure(ctx context.Context, subjectOrEmail stri
 		t := now.Add(lockDuration1)
 		lockedUntil = &t
 	}
-	_, err := s.db.ExecContext(ctx, `
+	if existingLock.Valid && existingLock.Time.After(now) && (lockedUntil == nil || existingLock.Time.After(*lockedUntil)) {
+		t := existingLock.Time
+		lockedUntil = &t
+	}
+
+	if _, err := tx.ExecContext(ctx, `
 		INSERT INTO auth_failures (subject_or_email, count, last_failure_at, locked_until) VALUES (?,?,?,?)
 		ON CONFLICT(subject_or_email) DO UPDATE SET count=excluded.count, last_failure_at=excluded.last_failure_at, locked_until=excluded.locked_until`,
-		subjectOrEmail, count, now, lockedUntil)
-	return err
+		subjectOrEmail, count, now, lockedUntil); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLiteStore) GetAuthFailures(ctx context.Context, subjectOrEmail string) (int, *time.Time, error) {
