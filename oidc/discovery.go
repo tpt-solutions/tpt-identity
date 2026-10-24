@@ -7,23 +7,23 @@ import (
 
 // DiscoveryDocument is the OIDC Provider Configuration per RFC 8414.
 type DiscoveryDocument struct {
-	Issuer                            string   `json:"issuer"`
-	AuthorizationEndpoint             string   `json:"authorization_endpoint"`
-	TokenEndpoint                     string   `json:"token_endpoint"`
-	UserinfoEndpoint                  string   `json:"userinfo_endpoint"`
-	JwksURI                           string   `json:"jwks_uri"`
-	RegistrationEndpoint              string   `json:"registration_endpoint"`
-	IntrospectionEndpoint             string   `json:"introspection_endpoint"`
-	RevocationEndpoint                string   `json:"revocation_endpoint"`
+	Issuer                string `json:"issuer"`
+	AuthorizationEndpoint string `json:"authorization_endpoint"`
+	TokenEndpoint         string `json:"token_endpoint"`
+	UserinfoEndpoint      string `json:"userinfo_endpoint"`
+	JwksURI               string `json:"jwks_uri"`
+	RegistrationEndpoint  string `json:"registration_endpoint"`
+	IntrospectionEndpoint string `json:"introspection_endpoint"`
+	RevocationEndpoint    string `json:"revocation_endpoint"`
 	// RFC 9126: Pushed Authorization Requests
 	PushedAuthorizationRequestEndpoint string `json:"pushed_authorization_request_endpoint,omitempty"`
-	RequirePushedAuthorizationRequests  bool   `json:"require_pushed_authorization_requests,omitempty"`
+	RequirePushedAuthorizationRequests bool   `json:"require_pushed_authorization_requests,omitempty"`
 	// RFC 8628: Device Authorization Grant
 	DeviceAuthorizationEndpoint string `json:"device_authorization_endpoint,omitempty"`
 	// RP-Initiated Logout 1.0
 	EndSessionEndpoint string `json:"end_session_endpoint,omitempty"`
 	// RFC 9470: Step-Up Authentication
-	StepUpAuthenticationEndpoint string `json:"stepup_authentication_endpoint,omitempty"`
+	StepUpAuthenticationEndpoint      string   `json:"stepup_authentication_endpoint,omitempty"`
 	ResponseTypesSupported            []string `json:"response_types_supported"`
 	SubjectTypesSupported             []string `json:"subject_types_supported"`
 	IDTokenSigningAlgValuesSupported  []string `json:"id_token_signing_alg_values_supported"`
@@ -43,26 +43,26 @@ type DiscoveryDocument struct {
 // DiscoveryHandler returns an HTTP handler serving the OIDC discovery document.
 func (p *Provider) DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	doc := DiscoveryDocument{
-		Issuer:                            p.issuer,
-		AuthorizationEndpoint:             p.issuer + "/authorize",
-		TokenEndpoint:                     p.issuer + "/token",
-		UserinfoEndpoint:                  p.issuer + "/userinfo",
-		JwksURI:                           p.issuer + "/.well-known/jwks.json",
-		RegistrationEndpoint:              p.issuer + "/oidc/register",
-		IntrospectionEndpoint:             p.issuer + "/oauth/introspect",
-		RevocationEndpoint:                p.issuer + "/oidc/revoke",
+		Issuer:                p.issuer,
+		AuthorizationEndpoint: p.issuer + "/authorize",
+		TokenEndpoint:         p.issuer + "/token",
+		UserinfoEndpoint:      p.issuer + "/userinfo",
+		JwksURI:               p.issuer + "/.well-known/jwks.json",
+		RegistrationEndpoint:  p.issuer + "/oidc/register",
+		IntrospectionEndpoint: p.issuer + "/oauth/introspect",
+		RevocationEndpoint:    p.issuer + "/oidc/revoke",
 		// New protocol endpoints
-		PushedAuthorizationRequestEndpoint:  p.issuer + "/oidc/par",
-		DeviceAuthorizationEndpoint:         p.issuer + "/device_authorization",
-		EndSessionEndpoint:                  p.issuer + "/oidc/logout",
-		StepUpAuthenticationEndpoint:        p.issuer + "/oidc/stepup",
-		CredentialIssuerMetadataEndpoint:    p.issuer + "/.well-known/openid-credential-issuer",
-		ResponseTypesSupported:            []string{"code"},
-		SubjectTypesSupported:             []string{"public"},
-		IDTokenSigningAlgValuesSupported:  []string{"EdDSA"},
-		ScopesSupported:                   []string{"openid", "profile", "did"},
-		TokenEndpointAuthMethodsSupported: []string{"client_secret_basic", "client_secret_post", "none"},
-		ClaimsSupported:                   []string{"sub", "iss", "iat", "exp", "nonce", "did", "amr", "acr"},
+		PushedAuthorizationRequestEndpoint: p.issuer + "/oidc/par",
+		DeviceAuthorizationEndpoint:        p.issuer + "/device_authorization",
+		EndSessionEndpoint:                 p.issuer + "/oidc/logout",
+		StepUpAuthenticationEndpoint:       p.issuer + "/oidc/stepup",
+		CredentialIssuerMetadataEndpoint:   p.issuer + "/.well-known/openid-credential-issuer",
+		ResponseTypesSupported:             []string{"code"},
+		SubjectTypesSupported:              []string{"public"},
+		IDTokenSigningAlgValuesSupported:   []string{"EdDSA"},
+		ScopesSupported:                    []string{"openid", "profile", "did"},
+		TokenEndpointAuthMethodsSupported:  []string{"client_secret_basic", "client_secret_post", "none"},
+		ClaimsSupported:                    []string{"sub", "iss", "iat", "exp", "nonce", "did", "amr", "acr"},
 		GrantTypesSupported: []string{
 			"authorization_code",
 			"refresh_token",
@@ -78,5 +78,5 @@ func (p *Provider) DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	b, _ := json.MarshalIndent(doc, "", "  ")
 	w.Header().Set("Content-Type", "application/json")
-	w.Write(b)
+	_, _ = w.Write(b)
 }

@@ -38,21 +38,21 @@ func (p *Provider) IntrospectHandler(w http.ResponseWriter, r *http.Request) {
 	verified, err := Verify(token, p.signingPub)
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(inactive)
+		_ = json.NewEncoder(w).Encode(inactive)
 		return
 	}
 
 	// Check if token has been explicitly revoked.
 	if p.isAccessTokenRevoked(r.Context(), token) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(inactive)
+		_ = json.NewEncoder(w).Encode(inactive)
 		return
 	}
 
 	// Check expiry.
 	if time.Now().Unix() > verified.ExpiresAt {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(inactive)
+		_ = json.NewEncoder(w).Encode(inactive)
 		return
 	}
 
@@ -66,5 +66,5 @@ func (p *Provider) IntrospectHandler(w http.ResponseWriter, r *http.Request) {
 		TokenType: "Bearer",
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

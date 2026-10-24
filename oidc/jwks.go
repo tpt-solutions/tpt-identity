@@ -26,7 +26,7 @@ type JWKS struct {
 func (p *Provider) JWKSHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	json.NewEncoder(w).Encode(JWKS{Keys: p.publicJWKS()})
+	_ = json.NewEncoder(w).Encode(JWKS{Keys: p.publicJWKS()})
 }
 
 // publicJWKS returns the active signing key(s) as JWKs.

@@ -78,7 +78,7 @@ func (p *Provider) RevokeHandler(w http.ResponseWriter, r *http.Request) {
 
 	// RFC 7009 §2.2: always return 200, even if token was unknown.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{})
+	_ = json.NewEncoder(w).Encode(map[string]string{})
 }
 
 func hashTokenValue(token string) string {

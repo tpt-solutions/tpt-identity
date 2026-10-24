@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"slices"
-	"strings"
 )
 
 // LogoutHandler handles GET /oidc/logout (RP-Initiated Logout 1.0).
@@ -71,13 +70,11 @@ func (p *Provider) LogoutHandler(w http.ResponseWriter, r *http.Request) {
 		// If URI is not registered, silently fall back to issuer root (no redirect leak).
 	}
 
-	if state != "" && strings.Contains(target, "?") {
-		target += "&state=" + state
-	} else if state != "" {
-		target += "?state=" + state
+	if state != "" {
+		target = AppendQuery(target, map[string]string{"state": state})
 	}
 
-	http.Redirect(w, r, target, http.StatusFound)
+	http.Redirect(w, r, target, http.StatusFound) //nolint:gosec // G710: target is the issuer or a logout URI registered for the client
 }
 
 // isRegisteredLogoutURI reports whether uri is one of clientID's registered

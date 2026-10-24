@@ -20,22 +20,22 @@ import (
 
 // OID4VPRequest is an OID4VP authorization request.
 type OID4VPRequest struct {
-	ID                   string    `json:"id"`
-	ClientID             string    `json:"client_id"`             // verifier DID or client_id
-	ResponseType         string    `json:"response_type"`         // "vp_token"
-	ResponseMode         string    `json:"response_mode"`         // "direct_post"
-	ResponseURI          string    `json:"response_uri"`          // where wallet POSTs the response
-	Nonce                string    `json:"nonce"`
-	PresentationDefinition any     `json:"presentation_definition"` // DIF PE v2
-	State                string    `json:"state,omitempty"`
-	ExpiresAt            time.Time `json:"expires_at"`
-	CreatedAt            time.Time `json:"created_at"`
+	ID                     string    `json:"id"`
+	ClientID               string    `json:"client_id"`     // verifier DID or client_id
+	ResponseType           string    `json:"response_type"` // "vp_token"
+	ResponseMode           string    `json:"response_mode"` // "direct_post"
+	ResponseURI            string    `json:"response_uri"`  // where wallet POSTs the response
+	Nonce                  string    `json:"nonce"`
+	PresentationDefinition any       `json:"presentation_definition"` // DIF PE v2
+	State                  string    `json:"state,omitempty"`
+	ExpiresAt              time.Time `json:"expires_at"`
+	CreatedAt              time.Time `json:"created_at"`
 }
 
 // OID4VPResponse holds the wallet's response to a presentation request.
 type OID4VPResponse struct {
 	RequestID  string    `json:"request_id"`
-	VPToken    string    `json:"vp_token"`    // JSON-encoded VP or JWT
+	VPToken    string    `json:"vp_token"` // JSON-encoded VP or JWT
 	State      string    `json:"state,omitempty"`
 	ReceivedAt time.Time `json:"received_at"`
 	Error      string    `json:"error,omitempty"`
@@ -128,15 +128,15 @@ func (h *OID4VPHandler) CreateRequestHandler(w http.ResponseWriter, r *http.Requ
 	nonce, _ := randomHex(16)
 
 	pReq := &OID4VPRequest{
-		ID:                   id,
-		ClientID:             req.ClientID,
-		ResponseType:         "vp_token",
-		ResponseMode:         req.ResponseMode,
-		ResponseURI:          fmt.Sprintf("%s/oid4vp/responses", h.p.issuer),
-		Nonce:                nonce,
+		ID:                     id,
+		ClientID:               req.ClientID,
+		ResponseType:           "vp_token",
+		ResponseMode:           req.ResponseMode,
+		ResponseURI:            fmt.Sprintf("%s/oid4vp/responses", h.p.issuer),
+		Nonce:                  nonce,
 		PresentationDefinition: req.PresentationDefinition,
-		ExpiresAt:            time.Now().Add(ttl),
-		CreatedAt:            time.Now(),
+		ExpiresAt:              time.Now().Add(ttl),
+		CreatedAt:              time.Now(),
 	}
 
 	h.store.mu.Lock()
@@ -147,7 +147,7 @@ func (h *OID4VPHandler) CreateRequestHandler(w http.ResponseWriter, r *http.Requ
 	deepLink := fmt.Sprintf("openid4vp://?request_uri=%s&client_id=%s", requestURI, req.ClientID)
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"request_id":  id,
 		"request_uri": requestURI,
 		"deep_link":   deepLink,
@@ -197,7 +197,7 @@ func (h *OID4VPHandler) GetRequestHandler(w http.ResponseWriter, r *http.Request
 	}
 
 	w.Header().Set("Content-Type", "application/oauth-authz-req+jwt")
-	w.Write([]byte(reqJWT))
+	_, _ = w.Write([]byte(reqJWT))
 }
 
 // PostResponseHandler handles POST /oid4vp/responses — the wallet posts the VP token.
@@ -248,7 +248,7 @@ func (h *OID4VPHandler) PostResponseHandler(w http.ResponseWriter, r *http.Reque
 
 	// OID4VP §6.2: redirect_uri or direct_post response is 200 with redirect_uri.
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	_ = json.NewEncoder(w).Encode(map[string]string{
 		"redirect_uri": fmt.Sprintf("%s/oid4vp/responses/%s/result", h.p.issuer, state),
 	})
 }
@@ -265,17 +265,17 @@ func (h *OID4VPHandler) GetResponseHandler(w http.ResponseWriter, r *http.Reques
 	if !ok {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusAccepted)
-		json.NewEncoder(w).Encode(map[string]string{
-			"status": "pending",
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"status":  "pending",
 			"message": "Waiting for wallet to submit presentation.",
 		})
 		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
-		"status":     "complete",
-		"vp_token":   resp.VPToken,
+	_ = json.NewEncoder(w).Encode(map[string]any{
+		"status":      "complete",
+		"vp_token":    resp.VPToken,
 		"received_at": resp.ReceivedAt,
 	})
 }

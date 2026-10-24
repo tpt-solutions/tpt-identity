@@ -70,5 +70,5 @@ func (p *Provider) WebFingerHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/jrd+json")
 	w.Header().Set("Access-Control-Allow-Origin", "*") // WebFinger must be CORS-open
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }

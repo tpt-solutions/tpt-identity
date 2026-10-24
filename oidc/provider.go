@@ -1,30 +1,43 @@
 package oidc
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/sha256"
-	"context"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/tpt-solutions/tpt-identity/internal/netguard"
 	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
-const (
-	codeTTL          = 5 * time.Minute
-	idTokenTTL       = time.Hour
-	accessTokenTTL   = time.Hour
-	refreshTokenTTL  = 30 * 24 * time.Hour // 30 days
-)
+// TokenTTLs are the lifetimes of authorization codes and of the tokens the provider issues.
+type TokenTTLs struct {
+	Code    time.Duration
+	ID      time.Duration
+	Access  time.Duration
+	Refresh time.Duration
+}
+
+// DefaultTokenTTLs returns the lifetimes used when no oidc.*_ttl is configured.
+func DefaultTokenTTLs() TokenTTLs {
+	return TokenTTLs{
+		Code:    5 * time.Minute,
+		ID:      time.Hour,
+		Access:  time.Hour,
+		Refresh: 30 * 24 * time.Hour,
+	}
+}
 
 // Provider handles OIDC authorization code flow endpoints.
 type Provider struct {
@@ -35,6 +48,14 @@ type Provider struct {
 	store      store.Store
 	// devicePolls records the last poll time per device_code for slow_down enforcement.
 	devicePolls sync.Map
+	// cNonces holds issued OID4VCI c_nonce values (nonce → expiry); each is single use.
+	cNonces sync.Map
+	// holderKeys resolves a holder DID to its published keys for OID4VCI proof checks.
+	holderKeys HolderKeyResolver
+	// ttl holds the configured token lifetimes.
+	ttl TokenTTLs
+	// trustedProxies are the CIDR ranges whose X-Forwarded-For is honoured for session IPs.
+	trustedProxies []*net.IPNet
 }
 
 // NewProvider creates an OIDC Provider.
@@ -45,6 +66,23 @@ func NewProvider(issuer string, key ed25519.PrivateKey, keyID string, st store.S
 		signingPub: key.Public().(ed25519.PublicKey),
 		keyID:      keyID,
 		store:      st,
+		ttl:        DefaultTokenTTLs(),
+	}
+}
+
+// SetTokenTTLs overrides the default lifetimes. A zero field keeps its default.
+func (p *Provider) SetTokenTTLs(t TokenTTLs) {
+	if t.Code > 0 {
+		p.ttl.Code = t.Code
+	}
+	if t.ID > 0 {
+		p.ttl.ID = t.ID
+	}
+	if t.Access > 0 {
+		p.ttl.Access = t.Access
+	}
+	if t.Refresh > 0 {
+		p.ttl.Refresh = t.Refresh
 	}
 }
 
@@ -88,7 +126,7 @@ func (p *Provider) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("WWW-Authenticate", `Bearer realm="tpt-identity"`)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		json.NewEncoder(w).Encode(map[string]string{"error": "login_required", "error_description": "authenticated session required"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "login_required", "error_description": "authenticated session required"})
 		return
 	}
 	// state is required to prevent CSRF.
@@ -135,20 +173,21 @@ func (p *Provider) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
 		UserAgent:           r.UserAgent(),
-		IPAddress:           remoteIP(r),
+		IPAddress:           p.clientIP(r),
 		CreatedAt:           time.Now(),
-		ExpiresAt:           time.Now().Add(codeTTL),
+		ExpiresAt:           time.Now().Add(p.ttl.Code),
 	}
 	if err := p.store.SaveSession(r.Context(), sess); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	redirect := redirectURI + "?code=" + code
+	params := map[string]string{"code": code}
 	if state != "" {
-		redirect += "&state=" + state
+		params["state"] = state
 	}
-	http.Redirect(w, r, redirect, http.StatusFound)
+	redirect := AppendQuery(redirectURI, params)
+	http.Redirect(w, r, redirect, http.StatusFound) //nolint:gosec // G710: redirectURI checked against client registration above
 }
 
 // TokenHandler handles POST /token — authorization code exchange and refresh token rotation.
@@ -174,6 +213,8 @@ func (p *Provider) TokenHandler(w http.ResponseWriter, r *http.Request) {
 		p.handleDeviceGrant(w, r)
 	case "urn:ietf:params:oauth:grant-type:token-exchange":
 		p.handleTokenExchange(w, r)
+	case "urn:ietf:params:oauth:grant-type:pre-authorized_code":
+		p.handlePreAuthorizedCode(w, r, p.store)
 	default:
 		writeError(w, "unsupported_grant_type", "supported: authorization_code, refresh_token, client_credentials, urn:ietf:params:oauth:grant-type:device_code, urn:ietf:params:oauth:grant-type:token-exchange")
 	}
@@ -223,12 +264,12 @@ func (p *Provider) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	idToken, err := IssueIDToken(p.issuer, sess.SubjectDID, sess.ClientID, sess.Nonce, idTokenTTL, p.signingKey, nil, p.keyID)
+	idToken, err := IssueIDToken(p.issuer, sess.SubjectDID, sess.ClientID, sess.Nonce, p.ttl.ID, p.signingKey, nil, p.keyID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
-	accessToken, err := IssueAccessToken(p.issuer, sess.SubjectDID, sess.ClientID, accessTokenTTL, p.signingKey, p.keyID)
+	accessToken, err := IssueAccessToken(p.issuer, sess.SubjectDID, sess.ClientID, p.ttl.Access, p.signingKey, p.keyID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -252,14 +293,14 @@ func (p *Provider) handleAuthCodeExchange(w http.ResponseWriter, r *http.Request
 		ClientID:   sess.ClientID,
 		Scope:      sess.Scope,
 		IssuedAt:   time.Now(),
-		ExpiresAt:  time.Now().Add(refreshTokenTTL),
+		ExpiresAt:  time.Now().Add(p.ttl.Refresh),
 	}
 	if err := p.store.SaveRefreshToken(r.Context(), rt); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	writeTokenResponse(w, accessToken, idToken, rawRefresh, sess.Scope, accessTokenTTL)
+	writeTokenResponse(w, accessToken, idToken, rawRefresh, sess.Scope, p.ttl.Access)
 }
 
 func (p *Provider) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Request) {
@@ -307,7 +348,7 @@ func (p *Provider) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Issue new tokens.
-	accessToken, err := IssueAccessToken(p.issuer, rt.SubjectDID, rt.ClientID, accessTokenTTL, p.signingKey, p.keyID)
+	accessToken, err := IssueAccessToken(p.issuer, rt.SubjectDID, rt.ClientID, p.ttl.Access, p.signingKey, p.keyID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -324,14 +365,14 @@ func (p *Provider) handleRefreshTokenGrant(w http.ResponseWriter, r *http.Reques
 		ClientID:   rt.ClientID,
 		Scope:      rt.Scope,
 		IssuedAt:   time.Now(),
-		ExpiresAt:  time.Now().Add(refreshTokenTTL),
+		ExpiresAt:  time.Now().Add(p.ttl.Refresh),
 	}
 	if err := p.store.SaveRefreshToken(r.Context(), newRT); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	writeTokenResponse(w, accessToken, "", rawRefresh, rt.Scope, accessTokenTTL)
+	writeTokenResponse(w, accessToken, "", rawRefresh, rt.Scope, p.ttl.Access)
 }
 
 // handleClientCredentialsGrant issues an access token for M2M clients (RFC 6749 §4.4).
@@ -366,16 +407,16 @@ func (p *Provider) handleClientCredentialsGrant(w http.ResponseWriter, r *http.R
 		scope = client.Scope
 	}
 	// sub = client_id for M2M tokens (no user DID).
-	accessToken, err := IssueAccessToken(p.issuer, clientID, clientID, accessTokenTTL, p.signingKey, p.keyID)
+	accessToken, err := IssueAccessToken(p.issuer, clientID, clientID, p.ttl.Access, p.signingKey, p.keyID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"token_type":   "Bearer",
-		"expires_in":   int(accessTokenTTL.Seconds()),
+		"expires_in":   int(p.ttl.Access.Seconds()),
 		"access_token": accessToken,
 		"scope":        scope,
 	})
@@ -394,7 +435,7 @@ func (p *Provider) UserinfoHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"sub": claims.Subject,
 		"did": claims.DID,
 		"amr": claims.AMR,
@@ -420,9 +461,9 @@ func (p *Provider) IssueSessionForDIDCtx(r *http.Request, subjectDID, clientID, 
 		CodeChallenge:       codeChallenge,
 		CodeChallengeMethod: codeChallengeMethod,
 		UserAgent:           r.UserAgent(),
-		IPAddress:           remoteIP(r),
+		IPAddress:           p.clientIP(r),
 		CreatedAt:           time.Now(),
-		ExpiresAt:           time.Now().Add(codeTTL),
+		ExpiresAt:           time.Now().Add(p.ttl.Code),
 	}
 	return code, p.store.SaveSession(r.Context(), sess)
 }
@@ -511,7 +552,7 @@ func writeTokenResponse(w http.ResponseWriter, accessToken, idToken, refreshToke
 	if idToken != "" {
 		resp["id_token"] = idToken
 	}
-	json.NewEncoder(w).Encode(resp)
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 func generateRefreshToken() (raw, hash string, err error) {
@@ -546,15 +587,14 @@ func containsURI(list []string, uri string) bool {
 	return false
 }
 
-func remoteIP(r *http.Request) string {
-	if fwd := r.Header.Get("X-Forwarded-For"); fwd != "" {
-		return strings.SplitN(fwd, ",", 2)[0]
-	}
-	ip := r.RemoteAddr
-	if idx := strings.LastIndex(ip, ":"); idx > 0 {
-		return ip[:idx]
-	}
-	return ip
+func (p *Provider) clientIP(r *http.Request) string {
+	return netguard.ClientIP(r.RemoteAddr, r.Header.Get("X-Forwarded-For"), p.trustedProxies)
+}
+
+// SetTrustedProxies sets the proxy ranges whose X-Forwarded-For header is trusted when the
+// provider records a session IP. Empty means RemoteAddr is always used.
+func (p *Provider) SetTrustedProxies(nets []*net.IPNet) {
+	p.trustedProxies = nets
 }
 
 func writeError(w http.ResponseWriter, code, desc string) {
@@ -564,7 +604,7 @@ func writeError(w http.ResponseWriter, code, desc string) {
 func writeErrorStatus(w http.ResponseWriter, status int, code, desc string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": desc})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": code, "error_description": desc})
 }
 
 func randomHex(n int) (string, error) {

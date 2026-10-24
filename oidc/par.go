@@ -80,7 +80,7 @@ func (p *Provider) PARHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
 	w.WriteHeader(http.StatusCreated)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"request_uri": requestURI,
 		"expires_in":  int(parTTL.Seconds()),
 	})

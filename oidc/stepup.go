@@ -56,16 +56,16 @@ func (p *Provider) StepUpHandler(w http.ResponseWriter, r *http.Request) {
 			"acr":   currentClaims.ACR,
 			"scope": currentClaims.Scope,
 		}
-		token, err := issueJWTWithExtra(p.issuer, currentClaims.Subject, currentClaims.Audience, accessTokenTTL, p.signingKey, p.keyID, extra)
+		token, err := issueJWTWithExtra(p.issuer, currentClaims.Subject, currentClaims.Audience, p.ttl.Access, p.signingKey, p.keyID, extra)
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]any{
+		_ = json.NewEncoder(w).Encode(map[string]any{
 			"access_token": token,
 			"token_type":   "Bearer",
-			"expires_in":   int(accessTokenTTL.Seconds()),
+			"expires_in":   int(p.ttl.Access.Seconds()),
 			"acr":          currentClaims.ACR,
 		})
 		return
@@ -81,7 +81,7 @@ func (p *Provider) StepUpHandler(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusUnauthorized)
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"error":             "insufficient_user_authentication",
 		"error_description": "The current authentication level does not satisfy the required ACR: " + requiredACR,
 		"acr_values":        requiredACR,

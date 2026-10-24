@@ -1,7 +1,6 @@
 package oidc
 
 import (
-	"crypto/ed25519"
 	"encoding/json"
 	"net/http"
 	"strings"
@@ -113,7 +112,7 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 		extra["act"] = map[string]string{"sub": callerClientID}
 	}
 
-	accessToken, err := issueJWTWithExtra(p.issuer, claims.Subject, audience, accessTokenTTL, ed25519.PrivateKey(p.signingKey), p.keyID, extra)
+	accessToken, err := issueJWTWithExtra(p.issuer, claims.Subject, audience, p.ttl.Access, p.signingKey, p.keyID, extra)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -121,11 +120,11 @@ func (p *Provider) handleTokenExchange(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"access_token":      accessToken,
 		"issued_token_type": ttAccessToken,
 		"token_type":        "Bearer",
-		"expires_in":        int(accessTokenTTL.Seconds()),
+		"expires_in":        int(p.ttl.Access.Seconds()),
 		"scope":             effectiveScope,
 	})
 }

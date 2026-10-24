@@ -63,7 +63,7 @@ func (p *Provider) DeviceAuthorizationHandler(w http.ResponseWriter, r *http.Req
 	verificationURI := fmt.Sprintf("%s/device", p.issuer)
 	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("Cache-Control", "no-store")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"device_code":               devCode,
 		"user_code":                 userCode,
 		"verification_uri":          verificationURI,
@@ -80,7 +80,7 @@ func (p *Provider) DeviceVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	userCode := r.URL.Query().Get("user_code")
 	if userCode == "" {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"prompt": "Enter the user_code shown on your device at this URL, then POST to /device/approve.",
 		})
 		return
@@ -92,7 +92,7 @@ func (p *Provider) DeviceVerifyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{
+	_ = json.NewEncoder(w).Encode(map[string]any{
 		"client_id": dc.ClientID,
 		"scope":     dc.Scope,
 		"message":   "Authenticate and POST to /device/approve with {user_code, subject_did} to approve.",
@@ -134,7 +134,7 @@ func (p *Provider) DeviceApproveHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
+	_ = json.NewEncoder(w).Encode(map[string]string{"status": "approved"})
 }
 
 // handleDeviceGrant is called from TokenHandler when grant_type=urn:ietf:params:oauth:grant-type:device_code.
@@ -177,7 +177,7 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 		// RFC 8628 §3.5: return authorization_pending until approved or expired.
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
-		json.NewEncoder(w).Encode(map[string]string{
+		_ = json.NewEncoder(w).Encode(map[string]string{
 			"error":             "authorization_pending",
 			"error_description": "The user has not yet approved the device request; keep polling.",
 		})
@@ -185,7 +185,7 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Approved — issue tokens.
-	accessToken, err := IssueAccessToken(p.issuer, dc.SubjectDID, dc.ClientID, accessTokenTTL, p.signingKey, p.keyID)
+	accessToken, err := IssueAccessToken(p.issuer, dc.SubjectDID, dc.ClientID, p.ttl.Access, p.signingKey, p.keyID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
@@ -207,7 +207,7 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 		ClientID:   dc.ClientID,
 		Scope:      dc.Scope,
 		IssuedAt:   time.Now(),
-		ExpiresAt:  time.Now().Add(refreshTokenTTL),
+		ExpiresAt:  time.Now().Add(p.ttl.Refresh),
 	}
 	if err := p.store.SaveRefreshToken(r.Context(), rt); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -215,7 +215,7 @@ func (p *Provider) handleDeviceGrant(w http.ResponseWriter, r *http.Request) {
 	}
 	_ = p.store.DeleteDeviceCode(r.Context(), deviceCode) // single-use
 	p.devicePolls.Delete(deviceCode)
-	writeTokenResponse(w, accessToken, "", rawRefresh, dc.Scope, accessTokenTTL)
+	writeTokenResponse(w, accessToken, "", rawRefresh, dc.Scope, p.ttl.Access)
 }
 
 // generateUserCode returns a memorable 8-character user code in XXXX-XXXX format.
