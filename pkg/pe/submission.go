@@ -11,14 +11,14 @@ import (
 
 // PresentationSubmission maps a presented VP to a PresentationDefinition.
 type PresentationSubmission struct {
-	ID           string        `json:"id"`
-	DefinitionID string        `json:"definition_id"`
+	ID            string       `json:"id"`
+	DefinitionID  string       `json:"definition_id"`
 	DescriptorMap []Descriptor `json:"descriptor_map"`
 }
 
 // Descriptor maps an InputDescriptor to a credential path within the VP.
 type Descriptor struct {
-	ID     string `json:"id"`   // matches InputDescriptor.ID
+	ID     string `json:"id"`     // matches InputDescriptor.ID
 	Format string `json:"format"` // "ldp_vc", "jwt_vc", etc.
 	Path   string `json:"path"`   // JSON path into the VP, e.g. "$.verifiableCredential[0]"
 }
@@ -97,7 +97,7 @@ func extractArrayIndex(path string) int {
 		return 0 // default to first credential
 	}
 	var idx int
-	fmt.Sscanf(path[lb+1:rb], "%d", &idx)
+	_, _ = fmt.Sscanf(path[lb+1:rb], "%d", &idx)
 	return idx
 }
 

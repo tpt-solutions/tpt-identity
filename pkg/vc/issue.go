@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/tpt-solutions/tpt-identity/pkg/schema"
-	"github.com/google/uuid"
 )
 
 // ErrEphemeralIssuer is returned when a did:key is used as an issuer DID.
@@ -66,10 +66,10 @@ func Issue(opts IssueOptions) (*VerifiableCredential, error) {
 
 	now := time.Now().UTC()
 	cred := Credential{
-		Context: DefaultContext(),
-		ID:      "urn:uuid:" + uuid.NewString(),
-		Type:    []string{TypeVC, versionedSchemaID},
-		Issuer:  opts.IssuerDID,
+		Context:   DefaultContext(),
+		ID:        "urn:uuid:" + uuid.NewString(),
+		Type:      []string{TypeVC, versionedSchemaID},
+		Issuer:    opts.IssuerDID,
 		ValidFrom: now,
 		CredentialSubject: CredentialSubject{
 			ID:     opts.SubjectDID,

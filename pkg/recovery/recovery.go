@@ -75,10 +75,19 @@ func Combine(shares []Share) ([]byte, error) {
 	}
 	// Verify all shares have the same length.
 	length := len(shares[0].Value)
-	for _, s := range shares[1:] {
+	seen := make(map[byte]bool, len(shares))
+	for _, s := range shares {
 		if len(s.Value) != length {
 			return nil, errors.New("recovery: shares have inconsistent lengths")
 		}
+		// Index 0 is the secret itself, and a repeated index makes the Lagrange system singular.
+		if s.Index == 0 {
+			return nil, errors.New("recovery: share index 0 is reserved")
+		}
+		if seen[s.Index] {
+			return nil, fmt.Errorf("recovery: duplicate share index %d", s.Index)
+		}
+		seen[s.Index] = true
 	}
 
 	secret := make([]byte, length)
@@ -104,8 +113,6 @@ func NewRecoveryToken() ([]byte, error) {
 }
 
 // ── GF(256) arithmetic (primitive polynomial: x^8 + x^4 + x^3 + x + 1) ──────
-
-const gfPrim = 0x11b // x^8 + x^4 + x^3 + x + 1
 
 func gfMul(a, b byte) byte {
 	var p byte

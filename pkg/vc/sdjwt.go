@@ -293,16 +293,16 @@ func ParseSDJWT(token string) (*ParsedSDJWT, error) {
 
 // SDJWTVerifyResult contains the verified and disclosed claims from a presentation.
 type SDJWTVerifyResult struct {
-	IssuerDID       string
-	SubjectDID      string
+	IssuerDID  string
+	SubjectDID string
 	// SchemaID is the vct claim (versioned credential type).
-	SchemaID        string
+	SchemaID string
 	// DisclosedClaims contains only the claims the holder chose to reveal.
 	DisclosedClaims map[string]any
 	// AlwaysClaims contains the non-selective claims visible in the JWT payload.
-	AlwaysClaims    map[string]any
-	IssuedAt        time.Time
-	ExpiresAt       time.Time
+	AlwaysClaims map[string]any
+	IssuedAt     time.Time
+	ExpiresAt    time.Time
 	// KeyBindingVerified is true when a KB-JWT was present and verified.
 	KeyBindingVerified bool
 }

@@ -4,10 +4,10 @@ import "time"
 
 // W3C Verifiable Credentials Data Model 2.0 context.
 const (
-	ContextVC    = "https://www.w3.org/ns/credentials/v2"
-	ContextTpt   = "https://tpt-identity.org/ns/v1"
-	TypeVC       = "VerifiableCredential"
-	TypeVP       = "VerifiablePresentation"
+	ContextVC  = "https://www.w3.org/ns/credentials/v2"
+	ContextTpt = "https://tpt-identity.org/ns/v1"
+	TypeVC     = "VerifiableCredential"
+	TypeVP     = "VerifiablePresentation"
 )
 
 // CredentialStatus points to a BitstringStatusList entry for revocation checks.

@@ -2,7 +2,6 @@ package did
 
 import (
 	"crypto/ed25519"
-	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -92,12 +91,6 @@ func (p *peerMethod) StoreDocument(doc *Document) error {
 	}
 	p.docs[doc.ID] = doc
 	return nil
-}
-
-// fingerprintSHA256 returns the base64url-encoded SHA-256 of data (unused but useful for numalgo 1).
-func fingerprintSHA256(data []byte) string {
-	h := sha256.Sum256(data)
-	return base64.RawURLEncoding.EncodeToString(h[:])
 }
 
 func base64RawURL(b []byte) string {

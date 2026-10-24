@@ -12,8 +12,8 @@ import (
 	"sync"
 	"time"
 
-	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/google/uuid"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 // StatusListMinSize is the minimum number of status entries per the W3C spec.
@@ -166,7 +166,7 @@ func ParseEncodedList(encoded string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("status list: gzip open: %w", err)
 	}
-	defer gz.Close()
+	defer func() { _ = gz.Close() }() // read-only reader: nothing to flush
 	bits, err := io.ReadAll(io.LimitReader(gz, 16<<20))
 	if err != nil {
 		return nil, fmt.Errorf("status list: gzip read: %w", err)
@@ -181,6 +181,9 @@ func CheckStatus(bits []byte, status *CredentialStatus) error {
 		return nil
 	}
 	idx := status.StatusListIndex
+	if idx < 0 {
+		return fmt.Errorf("status list: index %d out of range", idx)
+	}
 	byteIdx := idx / 8
 	bitIdx := uint(idx) % 8
 	if byteIdx >= len(bits) {

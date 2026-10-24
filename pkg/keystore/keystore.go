@@ -136,8 +136,11 @@ func savePEM(key []byte, keyType, path, passphrase string) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", path, err)
 	}
-	defer f.Close()
-	return pem.Encode(f, block)
+	if err := pem.Encode(f, block); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func loadPEM(path, passphrase string) ([]byte, error) {

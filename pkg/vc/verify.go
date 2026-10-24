@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
-	"github.com/tpt-solutions/tpt-identity/internal/resolver"
-	"github.com/tpt-solutions/tpt-identity/pkg/did"
 	"github.com/multiformats/go-multibase"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 // StatusChecker is an optional callback for checking credentialStatus (revocation).

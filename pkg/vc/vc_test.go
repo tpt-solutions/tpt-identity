@@ -190,11 +190,17 @@ func TestStatusListRevokeUnrevoke(t *testing.T) {
 	if ok, _ := sl.IsRevoked(5); ok {
 		t.Error("expected not revoked initially")
 	}
-	sl.Revoke(5)
+	if err := sl.Revoke(5); err != nil {
+		t.Fatal(err)
+	}
+
 	if ok, _ := sl.IsRevoked(5); !ok {
 		t.Error("expected revoked after Revoke")
 	}
-	sl.Unrevoke(5)
+	if err := sl.Unrevoke(5); err != nil {
+		t.Fatal(err)
+	}
+
 	if ok, _ := sl.IsRevoked(5); ok {
 		t.Error("expected not revoked after Unrevoke")
 	}
@@ -202,8 +208,14 @@ func TestStatusListRevokeUnrevoke(t *testing.T) {
 
 func TestStatusListEncodeDecode(t *testing.T) {
 	sl := vc.NewStatusList("https://example.com/api/v1/status/test", 0)
-	sl.Revoke(0)
-	sl.Revoke(100)
+	if err := sl.Revoke(0); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := sl.Revoke(100); err != nil {
+		t.Fatal(err)
+	}
+
 	encoded, err := sl.EncodedList()
 	if err != nil {
 		t.Fatal(err)

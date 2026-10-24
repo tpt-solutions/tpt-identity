@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/google/uuid"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 // ReputationRecord holds the reputation of a domain or DID.
@@ -212,11 +212,11 @@ func sliceContains(s []string, v string) bool {
 type TrustLevel int
 
 const (
-	TrustUnknown    TrustLevel = iota // no record or unscored
-	TrustRestricted                   // score 0–24
-	TrustProvisional                  // score 25–59
-	TrustVerified                     // score 60–84
-	TrustTrusted                      // score 85–100
+	TrustUnknown     TrustLevel = iota // no record or unscored
+	TrustRestricted                    // score 0–24
+	TrustProvisional                   // score 25–59
+	TrustVerified                      // score 60–84
+	TrustTrusted                       // score 85–100
 )
 
 func (t TrustLevel) String() string {

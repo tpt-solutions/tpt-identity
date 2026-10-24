@@ -16,12 +16,11 @@ package vc
 //   - The server stores (presentation_id → verifier_did) for look-up.
 
 import (
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
-	"math/rand"
 	"time"
 )
 
@@ -47,9 +46,9 @@ func (t *SDJWTToken) PresentWithWatermark(revealKeys []string, verifierDID strin
 
 	// Build the watermark disclosure value.
 	wmValue := map[string]any{
-		"pid": presentationID,
+		"pid":  presentationID,
 		"vdid": verifierDID,
-		"ts":  time.Now().UTC().Unix(),
+		"ts":   time.Now().UTC().Unix(),
 	}
 
 	// Create a deterministic salt for the watermark disclosure using the presentation ID.
@@ -234,16 +233,9 @@ const presentationIDChars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxy
 
 func newPresentationID() string {
 	b := make([]byte, 16)
+	_, _ = rand.Read(b)
 	for i := range b {
-		b[i] = presentationIDChars[rand.Intn(len(presentationIDChars))]
+		b[i] = presentationIDChars[int(b[i])%len(presentationIDChars)]
 	}
 	return string(b)
 }
-
-// writeWatermarkRecordToJSON is a helper used by API handlers to serialise the record.
-func writeWatermarkRecordToJSON(record WatermarkRecord) ([]byte, error) {
-	return json.Marshal(record)
-}
-
-// dummy use of io to avoid import error
-var _ = io.ReadFull

@@ -1,7 +1,6 @@
 package schema_test
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/tpt-solutions/tpt-identity/pkg/schema"
@@ -181,9 +180,4 @@ func TestExtraSensitiveSchemas(t *testing.T) {
 			t.Errorf("expected %s to be extra-sensitive", id)
 		}
 	}
-}
-
-// helper
-func hasPrefix(s, prefix string) bool {
-	return strings.HasPrefix(s, prefix)
 }

@@ -11,8 +11,8 @@ import (
 type Source string
 
 const (
-	SourceCore      Source = "core"
-	SourceCommunity Source = "community"
+	SourceCore       Source = "core"
+	SourceCommunity  Source = "community"
 	SourceThirdParty Source = "third-party"
 )
 

@@ -6,18 +6,18 @@ import (
 	"fmt"
 	"time"
 
-	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/google/uuid"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 // LegalBasis describes the legal ground for processing under NZ Privacy Act 2020.
 type LegalBasis string
 
 const (
-	LegalBasisConsent     LegalBasis = "consent"
-	LegalBasisVitalInterest LegalBasis = "vital-interest"
+	LegalBasisConsent         LegalBasis = "consent"
+	LegalBasisVitalInterest   LegalBasis = "vital-interest"
 	LegalBasisLegalObligation LegalBasis = "legal-obligation"
-	LegalBasisPublicTask  LegalBasis = "public-task"
+	LegalBasisPublicTask      LegalBasis = "public-task"
 )
 
 // Receipt is a cryptographically signed record of a data access event.
@@ -49,8 +49,8 @@ type IssueOptions struct {
 	Purpose     string
 	LegalBasis  LegalBasis
 	ExpiresAt   *time.Time
-	SignerKey    ed25519.PrivateKey
-	SignerKeyID  string
+	SignerKey   ed25519.PrivateKey
+	SignerKeyID string
 }
 
 // Issue creates and signs a new consent receipt.

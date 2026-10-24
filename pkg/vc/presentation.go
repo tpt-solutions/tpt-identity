@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"time"
 
-	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/google/uuid"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 // PresentOptions configures Verifiable Presentation creation.

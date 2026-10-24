@@ -15,9 +15,7 @@ package vc
 
 import (
 	"crypto/ed25519"
-	"crypto/rand"
 	"fmt"
-	"io"
 	"strconv"
 	"strings"
 	"time"
@@ -138,12 +136,4 @@ func ageFromDOB(dob time.Time) int {
 		return 0
 	}
 	return years
-}
-
-// newCredentialID generates a UUID-like credential ID.
-func newCredentialID() string {
-	b := make([]byte, 16)
-	_, _ = io.ReadFull(rand.Reader, b)
-	s := fmt.Sprintf("%x", b)
-	return fmt.Sprintf("%s-%s-%s-%s-%s", s[:8], s[8:12], s[12:16], s[16:20], s[20:])
 }

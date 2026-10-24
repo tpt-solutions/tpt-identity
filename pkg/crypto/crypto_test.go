@@ -67,7 +67,7 @@ func TestJCS_DeterministicOutput(t *testing.T) {
 	aIdx := indexOf(s, `"a"`)
 	mIdx := indexOf(s, `"m"`)
 	zIdx := indexOf(s, `"z"`)
-	if !(aIdx < mIdx && mIdx < zIdx) {
+	if aIdx >= mIdx || mIdx >= zIdx {
 		t.Errorf("JCS keys not sorted: %s", s)
 	}
 }
@@ -82,7 +82,7 @@ func TestJCS_MapKeySorted(t *testing.T) {
 	aIdx := indexOf(s, `"a"`)
 	mIdx := indexOf(s, `"m"`)
 	zIdx := indexOf(s, `"z"`)
-	if !(aIdx < mIdx && mIdx < zIdx) {
+	if aIdx >= mIdx || mIdx >= zIdx {
 		t.Errorf("JCS map keys not sorted: %s", s)
 	}
 }

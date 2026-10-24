@@ -4,11 +4,11 @@ package pe
 
 // PresentationDefinition describes what credentials and claims a verifier requires.
 type PresentationDefinition struct {
-	ID               string           `json:"id"`
-	Name             string           `json:"name,omitempty"`
-	Purpose          string           `json:"purpose,omitempty"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name,omitempty"`
+	Purpose          string            `json:"purpose,omitempty"`
 	InputDescriptors []InputDescriptor `json:"input_descriptors"`
-	Format           *Format          `json:"format,omitempty"`
+	Format           *Format           `json:"format,omitempty"`
 }
 
 // InputDescriptor specifies a single credential requirement.
@@ -29,7 +29,7 @@ type Constraints struct {
 
 // Field specifies a required or preferred claim path.
 type Field struct {
-	Path      []string `json:"path"`       // JSON paths in order of preference, e.g. ["$.credentialSubject.given_name"]
+	Path      []string `json:"path"` // JSON paths in order of preference, e.g. ["$.credentialSubject.given_name"]
 	ID        string   `json:"id,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"`
 	Filter    *Filter  `json:"filter,omitempty"`
@@ -50,22 +50,22 @@ type Filter struct {
 
 // Format specifies acceptable credential and proof formats.
 type Format struct {
-	LDPvc  *FormatDetail `json:"ldp_vc,omitempty"`
-	LDPvp  *FormatDetail `json:"ldp_vp,omitempty"`
-	JWTVC  *FormatDetail `json:"jwt_vc,omitempty"`
-	JWTVP  *FormatDetail `json:"jwt_vp,omitempty"`
+	LDPvc *FormatDetail `json:"ldp_vc,omitempty"`
+	LDPvp *FormatDetail `json:"ldp_vp,omitempty"`
+	JWTVC *FormatDetail `json:"jwt_vc,omitempty"`
+	JWTVP *FormatDetail `json:"jwt_vp,omitempty"`
 }
 
 // FormatDetail lists acceptable algorithms for a format.
 type FormatDetail struct {
-	Alg   []string `json:"alg,omitempty"`
+	Alg       []string `json:"alg,omitempty"`
 	ProofType []string `json:"proof_type,omitempty"`
 }
 
 // PresentationRequest wraps a definition with a nonce for replay protection.
 type PresentationRequest struct {
-	ID         string                  `json:"id"`
-	Definition PresentationDefinition  `json:"presentation_definition"`
-	Nonce      string                  `json:"nonce"`
-	Domain     string                  `json:"domain,omitempty"`
+	ID         string                 `json:"id"`
+	Definition PresentationDefinition `json:"presentation_definition"`
+	Nonce      string                 `json:"nonce"`
+	Domain     string                 `json:"domain,omitempty"`
 }

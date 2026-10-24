@@ -139,10 +139,10 @@ func (w *webMethod) Create(opts CreateOptions) (string, *Document, error) {
 	}
 
 	doc := &Document{
-		Context:            DefaultContext(),
-		ID:                 did,
-		Created:            &now,
-		Updated:            &now,
+		Context: DefaultContext(),
+		ID:      did,
+		Created: &now,
+		Updated: &now,
 		VerificationMethod: []VerificationMethod{{
 			ID:                 sigKeyID,
 			Type:               "Ed25519VerificationKey2020",

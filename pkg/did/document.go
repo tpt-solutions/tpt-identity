@@ -4,9 +4,9 @@ import "time"
 
 // W3C DID Core context URLs.
 const (
-	ContextDIDCore   = "https://www.w3.org/ns/did/v1"
-	ContextED25519   = "https://w3id.org/security/suites/ed25519-2020/v1"
-	ContextX25519    = "https://w3id.org/security/suites/x25519-2020/v1"
+	ContextDIDCore = "https://www.w3.org/ns/did/v1"
+	ContextED25519 = "https://w3id.org/security/suites/ed25519-2020/v1"
+	ContextX25519  = "https://w3id.org/security/suites/x25519-2020/v1"
 )
 
 // Document is a W3C DID Document.

@@ -67,7 +67,7 @@ func TestCanAccessRevokedGrant(t *testing.T) {
 func TestRevokeGrantPreservesRecord(t *testing.T) {
 	g := newGrant("g1", "identity.legal-name", consent.GrantSchema)
 	p := consent.NewPolicy([]consent.Grant{g})
-	p.RevokeGrant("g1")
+	_ = p.RevokeGrant("g1") // first revoke; the second call is under test
 	// Revoking again should indicate already revoked, not "not found".
 	if err := p.RevokeGrant("g1"); err == nil {
 		t.Error("expected error on double-revoke")
@@ -116,12 +116,12 @@ func TestIssueReceipt(t *testing.T) {
 		t.Fatal(err)
 	}
 	r, err := consent.Issue(consent.IssueOptions{
-		SubjectDID: subject,
-		RelyingDID: relying,
-		SchemaID:   "identity.legal-name",
-		Purpose:    "identity verification",
-		LegalBasis: consent.LegalBasisConsent,
-		SignerKey:  priv,
+		SubjectDID:  subject,
+		RelyingDID:  relying,
+		SchemaID:    "identity.legal-name",
+		Purpose:     "identity verification",
+		LegalBasis:  consent.LegalBasisConsent,
+		SignerKey:   priv,
 		SignerKeyID: "did:peer:rp#key-1",
 	})
 	if err != nil {
@@ -138,11 +138,11 @@ func TestIssueReceipt(t *testing.T) {
 func TestReceiptWithdraw(t *testing.T) {
 	_, priv, _ := crypto.GenerateSigningKey()
 	r, _ := consent.Issue(consent.IssueOptions{
-		SubjectDID: subject,
-		RelyingDID: relying,
-		SchemaID:   "identity.legal-name",
-		LegalBasis: consent.LegalBasisConsent,
-		SignerKey:  priv,
+		SubjectDID:  subject,
+		RelyingDID:  relying,
+		SchemaID:    "identity.legal-name",
+		LegalBasis:  consent.LegalBasisConsent,
+		SignerKey:   priv,
 		SignerKeyID: "did:peer:rp#key-1",
 	})
 	if r.RevokedAt != nil {
@@ -158,12 +158,12 @@ func TestReceiptExpiresAt(t *testing.T) {
 	_, priv, _ := crypto.GenerateSigningKey()
 	expiry := time.Now().Add(24 * time.Hour)
 	r, _ := consent.Issue(consent.IssueOptions{
-		SubjectDID: subject,
-		RelyingDID: relying,
-		SchemaID:   "identity.legal-name",
-		LegalBasis: consent.LegalBasisConsent,
-		ExpiresAt:  &expiry,
-		SignerKey:  priv,
+		SubjectDID:  subject,
+		RelyingDID:  relying,
+		SchemaID:    "identity.legal-name",
+		LegalBasis:  consent.LegalBasisConsent,
+		ExpiresAt:   &expiry,
+		SignerKey:   priv,
 		SignerKeyID: "did:peer:rp#key-1",
 	})
 	if r.ExpiresAt == nil {
