@@ -112,6 +112,17 @@ bridges:
 #   rp_display_name: "TPT Identity"
 #   rp_origins: ["https://identity.example.com"]
 
+# Email delivery for magic links and password resets. Leave smtp.host empty to disable.
+# The relay must offer STARTTLS; credentials are never sent in plaintext. insecure_no_tls is for
+# a relay on a trusted local network only.
+# smtp:
+#   host: "smtp.example.com"
+#   port: 587
+#   username: "identity.com"
+#   password: "relay-password"
+#   from: "identity.com"
+#   insecure_no_tls: false
+
 # Logging
 log:
   level: "info"   # debug, info, warn, error

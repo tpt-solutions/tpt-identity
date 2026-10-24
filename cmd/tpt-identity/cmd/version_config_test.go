@@ -98,3 +98,16 @@ did_web:
 		t.Errorf("retired did_web block not reported: %+v", problems)
 	}
 }
+
+// An SMTP relay needs a sender address; without one, validation fails.
+func TestValidateConfigSMTPNeedsFrom(t *testing.T) {
+	path := writeConfig(t, `
+api_key: "0123456789abcdef0123456789abcdef"
+issuer: "https://identity.example.com"
+smtp:
+  host: "smtp.example.com"
+`)
+	if !hasProblem(validateConfig(path), "error", "smtp.from") {
+		t.Error("smtp.host without smtp.from was not reported")
+	}
+}

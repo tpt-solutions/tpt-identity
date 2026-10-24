@@ -15,6 +15,7 @@ import (
 	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
 	"github.com/tpt-solutions/tpt-identity/internal/events"
+	"github.com/tpt-solutions/tpt-identity/internal/mail"
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
@@ -202,7 +203,9 @@ func serveCmd() *cobra.Command {
 				logger.Warn("admin_api_key not set; admin endpoints accept the master api_key — set a separate admin_api_key in production")
 			}
 
-			srv := api.NewServer(api.Config{
+			// Magic links and password resets are delivered by SMTP when smtp.host is set. Without it
+			// the senders stay nil, and those flows report that no delivery channel is configured.
+			srvCfg := api.Config{
 				APIKey:                viper.GetString("api_key"),
 				AdminAPIKey:           adminKey,
 				ScopedKeys:            scopedKeys,
@@ -226,7 +229,22 @@ func serveCmd() *cobra.Command {
 				WebAuthnRPID:          viper.GetString("webauthn.rp_id"),
 				WebAuthnRPDisplayName: viper.GetString("webauthn.rp_display_name"),
 				WebAuthnRPOrigins:     viper.GetStringSlice("webauthn.rp_origins"),
-			})
+			}
+			if host := viper.GetString("smtp.host"); host != "" {
+				mailer := &mail.SMTP{
+					Host:          host,
+					Port:          viper.GetInt("smtp.port"),
+					Username:      viper.GetString("smtp.username"),
+					Password:      viper.GetString("smtp.password"),
+					From:          viper.GetString("smtp.from"),
+					InsecureNoTLS: viper.GetBool("smtp.insecure_no_tls"),
+					BaseURL:       issuer,
+				}
+				srvCfg.MagicLinkSender = mailer
+				srvCfg.PasswordResetSender = mailer
+				logger.Info("email delivery enabled", "smtp_host", host)
+			}
+			srv := api.NewServer(srvCfg)
 
 			// ── Consent expiry warning goroutine ──────────────────────────
 			warningDays := viper.GetInt("consent.expiry_warning_days")

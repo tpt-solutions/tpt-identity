@@ -96,6 +96,10 @@ func validateConfig(path string) []configProblem {
 		}
 	}
 
+	if v.GetString("smtp.host") != "" && v.GetString("smtp.from") == "" {
+		add("error", "smtp.host is set but smtp.from is not; the relay needs a sender address")
+	}
+
 	if v.GetString("api_key") == "" {
 		add("error", "api_key is not set (the server refuses to start without it)")
 	}
@@ -191,5 +195,11 @@ var knownConfigKeys = map[string]bool{
 	"consent.expiry_warning_days": true,
 	"marketplace.advertise":       true,
 	"log.level":                   true,
+	"smtp.host":                   true,
+	"smtp.port":                   true,
+	"smtp.username":               true,
+	"smtp.password":               true,
+	"smtp.from":                   true,
+	"smtp.insecure_no_tls":        true,
 	"log.format":                  true,
 }
