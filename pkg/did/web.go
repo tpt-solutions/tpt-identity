@@ -65,6 +65,10 @@ func ssrfDialer(ctx context.Context, network, addr string) (net.Conn, error) {
 	if err != nil {
 		return nil, fmt.Errorf("did:web ssrf: resolve host: %w", err)
 	}
+	// Every address must be public. The connection then goes to the address that was checked:
+	// dialling the name again would resolve it a second time, and a DNS answer that changes in
+	// between (DNS rebinding) would reach a private address.
+	var checked string
 	for _, ipStr := range ips {
 		ip := net.ParseIP(ipStr)
 		if ip == nil {
@@ -73,9 +77,16 @@ func ssrfDialer(ctx context.Context, network, addr string) (net.Conn, error) {
 		if isPrivateIP(ip) {
 			return nil, fmt.Errorf("did:web ssrf: %s resolves to private/loopback address %s", host, ipStr)
 		}
+		if checked == "" {
+			checked = ipStr
+		}
 	}
+	if checked == "" {
+		return nil, fmt.Errorf("did:web ssrf: %s resolves to no usable address", host)
+	}
+	_, port, _ := net.SplitHostPort(addr)
 	var d net.Dialer
-	return d.DialContext(ctx, network, addr)
+	return d.DialContext(ctx, network, net.JoinHostPort(checked, port))
 }
 
 // privateRanges lists all RFC-1918, link-local, loopback, and other non-routable CIDR ranges.
