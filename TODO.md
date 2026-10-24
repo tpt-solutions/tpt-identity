@@ -158,12 +158,12 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] IDOR: `DELETE /api/v1/me/links/{provider}` doesn't check link ownership
 - [ ] Revocation end-to-end: `credentialStatus` on issue, persisted status list, revoke/suspend endpoints, `StatusChecker` in verify, emit `credential.revoked`, build list URL from configured issuer not `r.Host`; freshness oracle must not return `fresh:true` for `status_list_check_required`
 - [x] Enforce suspended/deleted roles in token + `/me` paths; admin delete purges refresh tokens/passwords/links
-- [ ] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); read `did_web` config
-- [ ] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
+- [x] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); `did_web` config not read: the platform DID is derived from `issuer` (see api/platform_did.go)
+- [x] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
 - [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go`
 - [x] `http.MaxBytesReader` on all JSON bodies; server timeouts (`ReadHeaderTimeout` etc.) + graceful shutdown
-- [ ] TOTP: require old factor to re-enrol/unenrol; replay protection; pending state before first verify
-- [ ] Consent: grant ID/subject from server not body; call `validateGrant`; unknown scope must not bypass extra-sensitive; revoke/delete check subject; `CanAccess` has no callers
+- [x] TOTP: require old factor to re-enrol/unenrol; replay protection; pending state before first verify
+- [x] Consent: grant ID/subject from server not body; call `validateGrant`; unknown scope must not bypass extra-sensitive; revoke/delete check subject; `CanAccess` still has no callers (the policy engine is not yet wired into credential access)
 
 ### 13.3 Security — medium
 - [ ] `remoteIP` in `oidc/provider.go` trusts XFF unconditionally; parse XFF right-to-left skipping trusted hops
