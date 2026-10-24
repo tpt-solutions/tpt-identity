@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
 	"time"
 
 	"github.com/PhillipC05/tpt-identity/api"
@@ -34,6 +36,11 @@ func serveCmd() *cobra.Command {
 			viper.AutomaticEnv()
 			if err := viper.ReadInConfig(); err != nil {
 				return fmt.Errorf("read config: %w", err)
+			}
+			// Admin and metrics endpoints are gated by api_key; refuse to start without one
+			// rather than exposing them unauthenticated.
+			if viper.GetString("api_key") == "" {
+				return fmt.Errorf("api_key must be set in config (or TPT_IDENTITY_API_KEY)")
 			}
 
 			logLevel := new(slog.LevelVar)
@@ -158,6 +165,7 @@ func serveCmd() *cobra.Command {
 
 			srv := api.NewServer(api.Config{
 				APIKey:             viper.GetString("api_key"),
+				BridgeSecret:       viper.GetString("bridge_secret"),
 				Issuer:             issuer,
 				TotpPassphrase:     totpPassphrase,
 				SigningKey:         ks.SigningPriv,
@@ -168,6 +176,7 @@ func serveCmd() *cobra.Command {
 				Resolver:           res,
 				OIDC:               oidcProvider,
 				Bridges:            bridges,
+				Events:             eventBus,
 				Logger:             logger,
 				RateLimit:          viper.GetFloat64("rate_limit"),
 				TrustedProxies:     viper.GetStringSlice("server.trusted_proxies"),
@@ -205,8 +214,32 @@ func serveCmd() *cobra.Command {
 			if addr == "" {
 				addr = ":8080"
 			}
+			// Timeouts bound slow-client resource use. Shutdown drains in-flight requests on SIGINT/SIGTERM.
+			httpSrv := &http.Server{
+				Addr:              addr,
+				Handler:           srv,
+				ReadHeaderTimeout: 10 * time.Second,
+				ReadTimeout:       30 * time.Second,
+				WriteTimeout:      60 * time.Second,
+				IdleTimeout:       120 * time.Second,
+				MaxHeaderBytes:    1 << 20,
+			}
 			logger.Info("tpt-identity server starting", "addr", addr, "issuer", issuer)
-			return http.ListenAndServe(addr, srv)
+
+			stop, cancelSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancelSignals()
+			errCh := make(chan error, 1)
+			go func() { errCh <- httpSrv.ListenAndServe() }()
+
+			select {
+			case err := <-errCh:
+				return err
+			case <-stop.Done():
+			}
+			logger.Info("shutting down")
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			return httpSrv.Shutdown(shutdownCtx)
 		},
 	}
 	return c
