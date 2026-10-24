@@ -50,7 +50,7 @@ go run ./cmd/tpt-identity resolve "did:web:example.com"
 
 ### Module
 
-`github.com/PhillipC05/tpt-identity` — Go 1.22, pure-Go SQLite (`modernc.org/sqlite`, no CGo).
+`github.com/PhillipC05/tpt-identity` — Go 1.25, pure-Go SQLite (`modernc.org/sqlite`, no CGo).
 
 ### Request flow
 

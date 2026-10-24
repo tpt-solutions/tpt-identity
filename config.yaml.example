@@ -10,8 +10,13 @@ db_path: "tpt-identity.db"
 # HTTP server address
 listen_addr: ":8080"
 
-# Bearer token for the REST API (leave empty to disable auth — dev only)
+# Bearer token for the admin/API endpoints. Required: the server refuses to start without it.
 api_key: "change-me-to-a-long-random-string"
+
+# HMAC key for bridge (external login) state tokens. Use a separate random value of at
+# least 32 bytes. Required when running more than one replica; if unset, a random key is
+# generated at startup and in-flight bridge logins fail after a restart.
+# bridge_secret: "change-me-to-a-different-long-random-string"
 
 # Rate limiting — requests per second per IP (0 = use default 50 req/s)
 rate_limit: 0

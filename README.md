@@ -1,7 +1,7 @@
 # tpt-identity
 
-[![MIT License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![Go 1.22](https://img.shields.io/badge/go-1.22-00ADD8.svg)](https://go.dev)
+[![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
+[![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8.svg)](https://go.dev)
 
 Sovereign identity backbone for the TPT open-source ecosystem. Every person gets one DID that works across email, healthcare, payments, and civic systems — authenticated however makes sense for them.
 
@@ -308,4 +308,11 @@ tpt-identity exposes a pure REST + OIDC API. The recommended mobile integration 
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+Licensed under either of
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE))
+- MIT license ([LICENSE-MIT](LICENSE-MIT))
+
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in this project shall be dual licensed as above, without any additional terms or conditions.
