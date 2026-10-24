@@ -349,11 +349,13 @@ func (v *SDJWTVerifier) Verify(token, expectedNonce, expectedAudience string) (*
 		return nil, fmt.Errorf("sdjwt: %w", err)
 	}
 
-	// Check expiry.
-	if exp, ok := rawClaims["exp"].(float64); ok {
-		if time.Now().Unix() > int64(exp) {
-			return nil, errors.New("sdjwt: credential expired")
-		}
+	// exp is required: a credential without an expiry would never lapse.
+	exp, ok := rawClaims["exp"].(float64)
+	if !ok {
+		return nil, errors.New("sdjwt: missing exp claim")
+	}
+	if time.Now().Unix() > int64(exp) {
+		return nil, errors.New("sdjwt: credential expired")
 	}
 
 	// Build a set of _sd digests from the issuer payload.
@@ -384,17 +386,29 @@ func (v *SDJWTVerifier) Verify(token, expectedNonce, expectedAudience string) (*
 	}
 
 	// KB-JWT: required when expectedNonce or expectedAudience is set.
+	// A credential bound to a holder key (cnf) must be presented with a key-binding JWT,
+	// whether or not the verifier asked for a nonce.
+	holderPub, err := extractHolderKey(rawClaims)
+	if err != nil {
+		return nil, err
+	}
 	kbVerified := false
-	if parsed.KBToken != "" {
-		holderPub, err := extractHolderKey(rawClaims)
-		if err != nil || holderPub == nil {
-			return nil, errors.New("sdjwt: kb-jwt: no cnf holder key in token")
+	switch {
+	case holderPub != nil:
+		if parsed.KBToken == "" {
+			return nil, errors.New("sdjwt: key binding JWT required for a holder-bound credential")
 		}
 		if err := verifyKBJWT(parsed, holderPub, expectedNonce, expectedAudience); err != nil {
 			return nil, fmt.Errorf("sdjwt: kb-jwt: %w", err)
 		}
+		// Holder == subject: the presenter's key must belong to the subject DID.
+		if err := v.checkHolderControlsSubject(strOrEmpty(rawClaims["sub"]), holderPub); err != nil {
+			return nil, err
+		}
 		kbVerified = true
-	} else if expectedNonce != "" || expectedAudience != "" {
+	case parsed.KBToken != "":
+		return nil, errors.New("sdjwt: key binding JWT present but the credential has no cnf key")
+	case expectedNonce != "" || expectedAudience != "":
 		return nil, errors.New("sdjwt: key binding JWT required (nonce/audience expected) but not present")
 	}
 
@@ -501,10 +515,45 @@ func parseSDJWTPayload(jwt string) (map[string]any, error) {
 // It checks nonce, audience, sd_hash, and — when holderPub is non-nil — the
 // EdDSA signature. KB-JWTs without a cnf key in the issuer JWT are
 // structurally verified only (no signature check).
+// kbMaxAge bounds how old a key-binding JWT may be, to limit replay of captured presentations.
+const kbMaxAge = 5 * time.Minute
+
+// checkHolderControlsSubject confirms that subject is a DID whose document lists holderPub as
+// a verification method. Only then is the presenter the credential's subject.
+func (v *SDJWTVerifier) checkHolderControlsSubject(subject string, holderPub ed25519.PublicKey) error {
+	if subject == "" {
+		return errors.New("sdjwt: holder-bound credential has no subject")
+	}
+	doc, err := v.resolver.Resolve(subject)
+	if err != nil {
+		return fmt.Errorf("sdjwt: resolve subject: %w", err)
+	}
+	for _, vm := range doc.VerificationMethod {
+		if vm.PublicKeyMultibase == nil {
+			continue
+		}
+		pub, err := decodeMultibaseEd25519(*vm.PublicKeyMultibase)
+		if err == nil && string(pub) == string(holderPub) {
+			return nil
+		}
+	}
+	return errors.New("sdjwt: holder key is not a verification method of the subject DID")
+}
+
 func verifyKBJWT(parsed *ParsedSDJWT, holderPub ed25519.PublicKey, expectedNonce, expectedAud string) error {
 	kbClaims, err := parseSDJWTPayload(parsed.KBToken)
 	if err != nil {
 		return fmt.Errorf("parse kb claims: %w", err)
+	}
+
+	// The KB-JWT must be recent. A captured presentation is useless after kbMaxAge.
+	iat, ok := kbClaims["iat"].(float64)
+	if !ok {
+		return errors.New("kb-jwt missing iat")
+	}
+	age := time.Since(time.Unix(int64(iat), 0))
+	if age > kbMaxAge || age < -time.Minute {
+		return errors.New("kb-jwt is stale or dated in the future")
 	}
 
 	if expectedNonce != "" {
