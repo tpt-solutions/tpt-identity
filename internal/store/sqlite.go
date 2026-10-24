@@ -840,6 +840,9 @@ func (s *SQLiteStore) GetExternalLink(ctx context.Context, provider, externalID 
 	row := s.db.QueryRowContext(ctx, `SELECT subject_did, provider, external_id, linked_at, last_used_at FROM external_provider_links WHERE provider=? AND external_id=?`, provider, externalID)
 	var l ExternalProviderLink
 	if err := row.Scan(&l.SubjectDID, &l.Provider, &l.ExternalID, &l.LinkedAt, &l.LastUsedAt); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return nil, ErrNotFound
+		}
 		return nil, fmt.Errorf("get external link: %w", err)
 	}
 	return &l, nil
