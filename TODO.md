@@ -132,7 +132,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] `api/batch.go:119` — same `CredentialSubject["id"]` indexing error
 - [x] Re-run `go build ./... && go vet ./... && go test ./...` and fix any errors hidden behind the above (hidden error fixed: `randomHex` undefined in `api`, now defined in `api/server.go`)
 - [x] Dockerfile `golang:1.22-alpine` vs `go.mod` `go 1.25.0`; align Dockerfile, README badge, CLAUDE.md
-- [ ] Housekeeping: resolve LICENSE → LICENSE-MIT rename / LICENSE-APACHE (README says MIT only); delete `docs/TODO backup copy.md`, `history/`, stray TODO copies — rename and deletions of `docs/` and `TODO 1260613.md` done; `history/` (two stale TODO copies) still present, awaiting confirmation to delete
+- [ ] Housekeeping: license is done (LICENSE-MIT and LICENSE-APACHE, dual-licensed; `LICENSE` was renamed in c9f2793). Still open: delete `docs/TODO backup copy.md`, `history/`, stray TODO copies — rename and deletions of `docs/` and `TODO 1260613.md` done; `history/` (two stale TODO copies) still present, awaiting confirmation to delete
 
 ### 13.1 Security — critical (account takeover / open endpoints)
 - [x] `/authorize` trusts client-supplied `X-Subject-DID` (`oidc/provider.go:76`); require authenticated session (now requires a verified bearer token; 401 otherwise; regression test `TestAuthorizeRejectsForgedSubjectHeader`)
