@@ -171,11 +171,11 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Upstream OIDC RP: verify `iss`/`aud`/`nonce`/`email_verified`; timeouts; Ed25519 key length check; bootstrap VC only for verified email
 - [x] Metrics: label by route pattern, not raw `r.URL.Path` (cardinality)
 - [ ] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge — the dial now uses the checked address (DNS rebinding); the document id, port and cache items are still open
-- [ ] DIDComm: anoncrypt returns spoofable sender; add replay/`exp` handling; ECDH-1PU tag in KDF; handle received messages
+- [ ] DIDComm: anoncrypt returns spoofable sender; add replay/`exp` handling; ECDH-1PU tag in KDF; handle received messages — sender checks, expiry, clock and replay are done (api/didcomm.go). Still open: the ECDH-1PU content tag in the KDF (a wire-format change) and handling of received messages beyond logging
 - [ ] WebAuthn login finish must issue a session; check `CloneWarning`; anchored key visible in DID resolution — passkey login now returns a session token and refuses cloned authenticators; the anchored key in DID resolution is still open
 - [ ] Audit log: atomic append (head read + insert), timestamp in hash, surface append errors — atomic append and error logging are done; timestamp in the hash needs a versioned hash format first
-- [ ] Mapper: concurrent first-login creates duplicate identities; `isNotFound` string matching — the concurrent first-login race is fixed in-process (per-account lock); isNotFound matching and cross-replica uniqueness are still open
-- [ ] Admin: role filter applied after pagination; admin actions not audited — the role filter now applies before pagination; admin audit records are still open
+- [ ] Mapper: concurrent first-login creates duplicate identities; `isNotFound` string matching — the in-process race is fixed, and isNotFound now matches store.ErrNotFound only. Still open: cross-replica uniqueness of the external link
+- [x] Admin: role filter applied after pagination; admin actions not audited — role filter applies before pagination; admin actions are written to the audit chain
 - [ ] URL-encode `state`/`acr_values`/redirect params (`logout.go`, `provider.go:135`, `bridge.go:561`, `stepup.go`); PAR `client_id` binding; CORS `*` reflection — redirect and CORS fixes done; PAR `client_id` binding still open
 - [ ] `vc.Issue`: tie `IssuerDID` to `VerificationMethodID`; `CheckStatus` panics on negative index; schema `additionalProperties` — IssuerDID is tied to the verification method and CheckStatus no longer panics; the schema additionalProperties check is still open
 - [x] `recovery.Combine` reject duplicate/zero share indices; `RecordAuthFailure` atomic with decay; `/oauth/introspect` client auth (see the commits adding those tests)
@@ -192,7 +192,8 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate — retired keys now verify by kid and are published in the JWKS (identity.previous_keys). Generating a rotated key and its rotation CLI are still open
 - [ ] Config validation (issuer required + https, TTL parsing, unknown keys) — issuer and TTL validation done; unknown-key checks open — `config validate` is in place; the unknown-key check is still open
 - [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added. The migration check is blocked: OpenSQLite creates tables inline and never writes schema_migrations, which only `migrate up` does, so a check would mark a normal start as degraded. Unify the two schema paths first
-- [ ] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter and WebAuthn eviction now stop on shutdown; webhook delivery is still open
+- [x] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter, WebAuthn eviction and webhook deliveries all stop or drain on shutdown
+
 
 ### 13.5 Standards / production readiness
 - [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility — the verification side is done (retired keys by kid, in the JWKS). Still open: the rotation CLI, RS256/ES256, and the DID-document side
