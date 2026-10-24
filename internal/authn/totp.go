@@ -105,18 +105,28 @@ func (m *TOTPManager) VerifyCtx(ctx context.Context, subjectDID, code string) er
 	now := time.Now().Unix()
 	counter := now / int64(totpPeriod)
 	for delta := int64(-totpWindow); delta <= int64(totpWindow); delta++ {
-		expected := generateTOTP(secret, counter+delta)
-		if timingSafeEqual(code, expected) {
-			return nil
+		step := counter + delta
+		if !timingSafeEqual(code, generateTOTP(secret, step)) {
+			continue
 		}
+		// A matching code is accepted once. The step must be newer than the last one used.
+		ok, err := m.st.ConsumeTOTPStep(ctx, subjectDID, step)
+		if err != nil {
+			return fmt.Errorf("totp: record step: %w", err)
+		}
+		if !ok {
+			return errors.New("totp: code already used")
+		}
+		return nil
 	}
 	return errors.New("totp: invalid code")
 }
 
-// IsEnrolled returns true if the subject has a TOTP credential.
+// IsEnrolled returns true if the subject has a verified TOTP factor. A pending factor
+// (enrolled but never verified) does not count.
 func (m *TOTPManager) IsEnrolled(subjectDID string) bool {
-	_, err := m.st.GetTOTPCredential(context.Background(), subjectDID)
-	return err == nil
+	cred, err := m.st.GetTOTPCredential(context.Background(), subjectDID)
+	return err == nil && cred.VerifiedAt != nil
 }
 
 // Unenrol removes the TOTP credential for the subject.
