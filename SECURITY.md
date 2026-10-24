@@ -10,7 +10,7 @@
 
 **Please do not file public GitHub issues for security vulnerabilities.**
 
-Report security issues privately via [GitHub Security Advisories](https://github.com/PhillipC05/tpt-identity/security/advisories/new).
+Report security issues privately via [GitHub Security Advisories](https://github.com/tpt-solutions/tpt-identity/security/advisories/new).
 
 Include:
 - A clear description of the vulnerability

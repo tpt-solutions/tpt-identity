@@ -50,7 +50,7 @@ go run ./cmd/tpt-identity resolve "did:web:example.com"
 
 ### Module
 
-`github.com/PhillipC05/tpt-identity` — Go 1.25, pure-Go SQLite (`modernc.org/sqlite`, no CGo).
+`github.com/tpt-solutions/tpt-identity` — Go 1.25, pure-Go SQLite (`modernc.org/sqlite`, no CGo).
 
 ### Request flow
 
@@ -94,7 +94,7 @@ Registered at `init()` time via `pkg/did/method.go`'s global registry. The four 
 
 ### Credential schemas
 
-`pkg/schema/registry.go` holds the in-memory registry. All 50+ schemas are registered by the `init()` calls in `pkg/schema/core/*.go` — the serve command blank-imports this package (`_ "github.com/PhillipC05/tpt-identity/pkg/schema/core"`). Tests that need schemas must do the same. Schema IDs are versioned: `healthcare.nhi-credential-v1`; the registry can look up by base ID (`healthcare.nhi-credential`) to find the latest version.
+`pkg/schema/registry.go` holds the in-memory registry. All 50+ schemas are registered by the `init()` calls in `pkg/schema/core/*.go` — the serve command blank-imports this package (`_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"`). Tests that need schemas must do the same. Schema IDs are versioned: `healthcare.nhi-credential-v1`; the registry can look up by base ID (`healthcare.nhi-credential`) to find the latest version.
 
 Schemas marked `ExtraSensitive: true` (mental-health, addiction, criminal-record, etc.) require a separate, individually confirmed consent grant even when a category grant is active — enforced in `api/consents.go` and `pkg/consent/policy.go`.
 
@@ -194,7 +194,7 @@ TTL is **15 minutes** (hardcoded in `internal/bridge/providers/magiclink.go`). T
 - **Extra-sensitive schemas need individual grants** — category grants alone are insufficient for mental-health, sexual-health, reproductive-health, addiction, criminal-record schemas.
 - **LDAP requires `ldaps://`** — plaintext `ldap://` returns an error at bridge construction, not at runtime.
 - **Argon2id is slow by design** — don't call it in tests without a deterministic fixture or it will dominate test time.
-- **Schema `init()` must be imported** — tests touching schema validation need `_ "github.com/PhillipC05/tpt-identity/pkg/schema/core"`.
+- **Schema `init()` must be imported** — tests touching schema validation need `_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"`.
 - **SQLite is single-writer** — `db.SetMaxOpenConns(1)` is intentional; don't remove it.
 - **`did:peer` uses base64url multibase prefix `u`** — the multicodec key bytes are base64url-encoded with prefix `u`, not base58btc (`z`). The VC verifier has a fallback for `u`-prefixed keys.
 - **Webhook `handleListWebhooks` passes `""` as eventType** — `ListWebhookSubscriptions("", ...)` returns all subscriptions regardless of event type; non-empty values filter by event type. Do not change this to `"*"`.

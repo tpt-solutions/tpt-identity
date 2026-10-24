@@ -3,6 +3,7 @@
 [![License: MIT OR Apache-2.0](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](#license)
 [![Go 1.25](https://img.shields.io/badge/go-1.25-00ADD8.svg)](https://go.dev)
 
+[![CI](https://github.com/tpt-solutions/tpt-identity/actions/workflows/ci.yml/badge.svg)](https://github.com/tpt-solutions/tpt-identity/actions/workflows/ci.yml)
 Sovereign identity backbone for the TPT open-source ecosystem. Every person gets one DID that works across email, healthcare, payments, and civic systems — authenticated however makes sense for them.
 
 ## What it does
@@ -44,7 +45,7 @@ docker compose up --build
 
 ```bash
 # Install
-go install github.com/PhillipC05/tpt-identity/cmd/tpt-identity@latest
+go install github.com/tpt-solutions/tpt-identity/cmd/tpt-identity@latest
 
 # 1. Generate keys
 tpt-identity keygen --method web --domain example.com \
@@ -206,6 +207,10 @@ chmod 600 keys/ed25519.pem keys/x25519.pem
 ```
 
 ## API endpoints
+
+The full API is described in [`api/openapi.yaml`](api/openapi.yaml) (OpenAPI 3.1). The running server serves the same document at `GET /openapi.yaml`. Use it to generate clients, for example `progenitor` for Rust or `openapi-generator` for other languages. A test fails if a route is added to `api/server.go` without a matching entry in the spec.
+
+The tables below are a summary.
 
 ### Public — no auth required
 

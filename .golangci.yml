@@ -1,0 +1,40 @@
+version: "2"
+
+linters:
+  default: standard
+  enable:
+    - bodyclose
+    - gosec
+    - misspell
+    - unconvert
+  settings:
+    errcheck:
+      # Closing a read-side resource or rolling back after a commit has no
+      # recoverable error path, so these are deliberately not checked.
+      exclude-functions:
+        - (io.Closer).Close
+        - (io.ReadCloser).Close
+        - (*database/sql.DB).Close
+        - (*database/sql.Rows).Close
+        - (*database/sql.Tx).Rollback
+    gosec:
+      excludes:
+        # Bounded conversions in encoders and parsers; flagged on every length cast.
+        - G115
+        # Key and config files are operator-supplied paths by design.
+        - G304
+        # Event type names and token-type URNs match the "credential"/"token"
+        # keyword heuristic but are not secrets.
+        - G101
+        # Unchecked errors are enforced by errcheck, which runs alongside it.
+        - G104
+
+formatters:
+  enable:
+    - gofmt
+
+issues:
+  exclude-rules:
+    - path: _test\.go
+      linters:
+        - gosec
