@@ -29,7 +29,7 @@ type Constraints struct {
 
 // Field specifies a required or preferred claim path.
 type Field struct {
-	Path      []string `json:"path"` // JSON paths in order of preference, e.g. ["$.credentialSubject.given_name"]
+	Path      []string `json:"path"` // JSON paths in order of preference, e.g. ["$.credentialSubject.claims.given_name"]
 	ID        string   `json:"id,omitempty"`
 	Purpose   string   `json:"purpose,omitempty"`
 	Filter    *Filter  `json:"filter,omitempty"`

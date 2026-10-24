@@ -103,14 +103,15 @@ func extractArrayIndex(path string) int {
 
 // checkConstraints validates a credential against the constraint fields.
 func checkConstraints(c *Constraints, cred *vc.VerifiableCredential) error {
-	// Marshal the credential subject to a map for JSON-path-style access.
-	subjectBytes, err := json.Marshal(cred.CredentialSubject)
+	// Field paths are relative to the whole credential (DIF PE §5), so "$.credentialSubject.…" and
+	// "$.type" both resolve. Marshal the credential, not only its subject.
+	credBytes, err := json.Marshal(cred)
 	if err != nil {
-		return fmt.Errorf("marshal subject: %w", err)
+		return fmt.Errorf("marshal credential: %w", err)
 	}
-	var subjectMap map[string]any
-	if err := json.Unmarshal(subjectBytes, &subjectMap); err != nil {
-		return fmt.Errorf("unmarshal subject: %w", err)
+	var credMap map[string]any
+	if err := json.Unmarshal(credBytes, &credMap); err != nil {
+		return fmt.Errorf("unmarshal credential: %w", err)
 	}
 
 	for _, field := range c.Fields {
@@ -119,7 +120,7 @@ func checkConstraints(c *Constraints, cred *vc.VerifiableCredential) error {
 		}
 		found := false
 		for _, jsonPath := range field.Path {
-			val := resolveJSONPath(subjectMap, jsonPath)
+			val := resolveJSONPath(credMap, jsonPath)
 			if val != nil {
 				if field.Filter != nil {
 					if err := applyFilter(field.Filter, val); err != nil {
@@ -137,7 +138,7 @@ func checkConstraints(c *Constraints, cred *vc.VerifiableCredential) error {
 	return nil
 }
 
-// resolveJSONPath resolves a simple JSON path (e.g. "$.credentialSubject.given_name") against a map.
+// resolveJSONPath resolves a simple JSON path (e.g. "$.credentialSubject.claims.given_name") against a map.
 func resolveJSONPath(m map[string]any, path string) any {
 	// Strip leading "$." or "$"
 	path = strings.TrimPrefix(path, "$.")
