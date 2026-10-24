@@ -29,7 +29,7 @@ func testSDJWTIssuer(t *testing.T) (issuerDID, vmID string, priv ed25519.Private
 	if err != nil {
 		t.Fatal(err)
 	}
-	return id, id + "#signing-key-1", priv
+	return id, id + "#key-1", priv // did:peer documents publish the signing key as #key-1
 }
 
 func issueTestSDJWT(t *testing.T) *vc.SDJWTToken {

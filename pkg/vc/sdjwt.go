@@ -338,8 +338,18 @@ func (v *SDJWTVerifier) Verify(token, expectedNonce, expectedAudience string) (*
 		return nil, errors.New("sdjwt: missing iss claim")
 	}
 
-	// Resolve issuer DID → public key.
-	pub, err := v.resolveSigningKey(issuerDID)
+	// The issuer JWT names its signing key in the header kid. Verify with that key, and only that
+	// key: after a rotation the old key must not be accepted by accident.
+	kid, err := jwtHeaderKID(parsed.JWT)
+	if err != nil {
+		return nil, fmt.Errorf("sdjwt: %w", err)
+	}
+	if kid == "" {
+		return nil, errors.New("sdjwt: issuer JWT has no kid")
+	}
+
+	// Resolve issuer DID + kid → public key.
+	pub, err := v.resolveSigningKey(issuerDID, kid)
 	if err != nil {
 		return nil, fmt.Errorf("sdjwt: resolve issuer key: %w", err)
 	}
@@ -442,21 +452,45 @@ func (v *SDJWTVerifier) Verify(token, expectedNonce, expectedAudience string) (*
 }
 
 // resolveSigningKey resolves an issuer DID to its active Ed25519 signing key.
-func (v *SDJWTVerifier) resolveSigningKey(issuerDID string) (ed25519.PublicKey, error) {
+// resolveSigningKey returns the active Ed25519 key that the DID document publishes under kid.
+// A revoked key, or a kid the document does not name, is an error.
+func (v *SDJWTVerifier) resolveSigningKey(issuerDID, kid string) (ed25519.PublicKey, error) {
 	doc, err := v.resolver.Resolve(issuerDID)
 	if err != nil {
 		return nil, fmt.Errorf("resolve DID %q: %w", issuerDID, err)
 	}
 	for _, vm := range doc.VerificationMethod {
-		if vm.Revoked || vm.PublicKeyMultibase == nil {
+		if vm.ID != kid {
 			continue
 		}
-		if vm.Type != "Ed25519VerificationKey2020" {
-			continue
+		if vm.Revoked {
+			return nil, fmt.Errorf("key %q of %s is revoked", kid, issuerDID)
+		}
+		if vm.Type != "Ed25519VerificationKey2020" || vm.PublicKeyMultibase == nil {
+			return nil, fmt.Errorf("key %q of %s is not an Ed25519 verification key", kid, issuerDID)
 		}
 		return decodeMultibaseEd25519(*vm.PublicKeyMultibase)
 	}
-	return nil, fmt.Errorf("no active Ed25519 verification method in DID document for %s", issuerDID)
+	return nil, fmt.Errorf("kid %q is not a verification method of %s", kid, issuerDID)
+}
+
+// jwtHeaderKID returns the kid from a compact JWT's protected header, or "" when there is none.
+func jwtHeaderKID(jwt string) (string, error) {
+	parts := strings.SplitN(jwt, ".", 3)
+	if len(parts) != 3 {
+		return "", errors.New("malformed JWT")
+	}
+	raw, err := base64.RawURLEncoding.DecodeString(parts[0])
+	if err != nil {
+		return "", fmt.Errorf("decode header: %w", err)
+	}
+	var header struct {
+		KID string `json:"kid"`
+	}
+	if err := json.Unmarshal(raw, &header); err != nil {
+		return "", fmt.Errorf("parse header: %w", err)
+	}
+	return header.KID, nil
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
