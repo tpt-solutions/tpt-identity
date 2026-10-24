@@ -35,6 +35,10 @@ type Store interface {
 	// to republish a status list VC after a revocation.
 	PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error
 
+	// RecordDIDCommMessage remembers that sender delivered messageID until the given time. A message seen
+	// before returns ErrDIDCommReplay. sender is "" for anonymous (anoncrypt) messages.
+	RecordDIDCommMessage(ctx context.Context, sender, messageID string, until time.Time) error
+
 	// --- OID4VP presentation state (JSON documents owned by the oidc package) ---
 	// SaveOID4VPRequest stores a request until expiresAt. It returns ErrOID4VPRequestExists for a reused id.
 	SaveOID4VPRequest(ctx context.Context, id string, data []byte, expiresAt time.Time) error
@@ -437,3 +441,6 @@ var ErrOID4VPRequestExists = errors.New("oid4vp request already exists")
 
 // ErrOID4VPResponseExists means the request already has its response.
 var ErrOID4VPResponseExists = errors.New("oid4vp response already received")
+
+// ErrDIDCommReplay means a DIDComm message id was already received from that sender.
+var ErrDIDCommReplay = errors.New("didcomm message already received")
