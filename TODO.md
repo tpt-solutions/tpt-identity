@@ -156,7 +156,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Never publish secrets on event bus (password-reset token, recovery shares)
 - [x] Password change/reset always 500 (interface mismatch `api/password.go:17`); key by email; atomic reset; revoke sessions on reset
 - [x] IDOR: `DELETE /api/v1/me/links/{provider}` doesn't check link ownership
-- [ ] Revocation end-to-end: `credentialStatus` on issue, persisted status list, revoke/suspend endpoints, `StatusChecker` in verify, emit `credential.revoked`, build list URL from configured issuer not `r.Host`; freshness oracle must not return `fresh:true` for `status_list_check_required`
+- [x] Revocation end-to-end: `credentialStatus` on issue, persisted status list, revoke/suspend endpoints, `StatusChecker` in verify, emit `credential.revoked`, build list URL from configured issuer not `r.Host`; freshness oracle must not return `fresh:true` for `status_list_check_required` — done: every issued credential gets a status entry; POST /api/v1/credentials/{id}/revoke sets it and republishes the signed list; verify and the freshness oracle check the stored bits and fail closed for lists this issuer does not host. Suspend purpose stays open (see the SD-JWT status-list item)
 - [x] Enforce suspended/deleted roles in token + `/me` paths; admin delete purges refresh tokens/passwords/links
 - [x] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); `did_web` config not read: the platform DID is derived from `issuer` (see api/platform_did.go)
 - [x] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
@@ -189,13 +189,13 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] `did_web` config block not read (block removed from example; DID is derived from `issuer`)
 - [x] Re-check credential bootstrap (`maybeIssueBootstrapVC`) after issuer-DID fix
 - [ ] `did:ion` Create not implemented (`pkg/did/ion.go:35`)
-- [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate
+- [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate — retired keys now verify by kid and are published in the JWKS (identity.previous_keys). Generating a rotated key and its rotation CLI are still open
 - [ ] Config validation (issuer required + https, TTL parsing, unknown keys) — issuer and TTL validation done; unknown-key checks open — `config validate` is in place; the unknown-key check is still open
 - [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added. The migration check is blocked: OpenSQLite creates tables inline and never writes schema_migrations, which only `migrate up` does, so a check would mark a normal start as degraded. Unify the two schema paths first
 - [ ] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter and WebAuthn eviction now stop on shutdown; webhook delivery is still open
 
 ### 13.5 Standards / production readiness
-- [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility
+- [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility — the verification side is done (retired keys by kid, in the JWKS). Still open: the rotation CLI, RS256/ES256, and the DID-document side
 - [ ] DID document update / key rotation / deactivation API
 - [ ] Persist OID4VP state and access-token revocation (replica-safe)
 - [ ] PostgreSQL store; multi-tenancy via existing `TenantID` fields
