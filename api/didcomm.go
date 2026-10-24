@@ -8,8 +8,10 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/multiformats/go-multibase"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 
 	"github.com/tpt-solutions/tpt-identity/pkg/did"
 	"github.com/tpt-solutions/tpt-identity/pkg/didcomm"
@@ -75,10 +77,53 @@ func (s *Server) handleDIDCommReceive(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	now := time.Now()
+	if msg.ID == "" {
+		writeJSONError(w, http.StatusBadRequest, "invalid_message", "message id is required for replay protection")
+		return
+	}
+	if msg.ExpiresTime != 0 && now.Unix() > msg.ExpiresTime {
+		writeJSONError(w, http.StatusBadRequest, "message_expired", "message expires_time has passed")
+		return
+	}
+	if msg.CreatedTime != 0 && absDuration(now.Sub(time.Unix(msg.CreatedTime, 0))) > didcommClockSkew {
+		writeJSONError(w, http.StatusBadRequest, "invalid_message", "created_time is outside the accepted window")
+		return
+	}
+
+	// Only an authenticated (authcrypt) envelope identifies its sender. For anoncrypt, the from field
+	// is whatever the sender wrote, so it is logged as unauthenticated and never trusted.
+	sender := ""
+	if senderKID != "" {
+		sender = didOfKeyID(senderKID)
+		if msg.From != "" && msg.From != sender {
+			writeJSONError(w, http.StatusBadRequest, "sender_mismatch", "from does not match the authenticated sender")
+			return
+		}
+	}
+
+	// Replay: a (sender, id) pair is accepted once within its window.
+	until := now.Add(didcommReplayWindow)
+	if msg.ExpiresTime != 0 {
+		until = time.Unix(msg.ExpiresTime, 0)
+	}
+	if err := s.store.RecordDIDCommMessage(r.Context(), sender, msg.ID, until); err != nil {
+		if errors.Is(err, store.ErrDIDCommReplay) {
+			writeJSONError(w, http.StatusConflict, "replayed_message", "this message was already received")
+			return
+		}
+		writeJSONError(w, http.StatusInternalServerError, "store_error", "could not record the message")
+		return
+	}
+
+	authenticated := "unauthenticated"
+	if sender != "" {
+		authenticated = sender
+	}
 	s.logger.Info("didcomm message received",
 		"message_id", msg.ID,
 		"type", msg.Type,
-		"from", msg.From,
+		"sender", authenticated,
 		"sender_kid", senderKID,
 		"ip", s.clientIP(r),
 	)
@@ -132,4 +177,27 @@ func decodeX25519Multibase(mb string) ([32]byte, error) {
 	var out [32]byte
 	copy(out[:], raw[2:34])
 	return out, nil
+}
+
+// Replay and clock limits for received DIDComm messages.
+const (
+	// didcommClockSkew bounds how far created_time may sit from the server clock.
+	didcommClockSkew = 5 * time.Minute
+	// didcommReplayWindow is how long a message id is remembered when the message sets no expires_time.
+	didcommReplayWindow = 24 * time.Hour
+)
+
+// didOfKeyID returns the DID part of a key ID such as "did:web:example.com#key-2".
+func didOfKeyID(kid string) string {
+	if i := strings.LastIndex(kid, "#"); i >= 0 {
+		return kid[:i]
+	}
+	return kid
+}
+
+func absDuration(d time.Duration) time.Duration {
+	if d < 0 {
+		return -d
+	}
+	return d
 }
