@@ -233,10 +233,19 @@ func serveCmd() *cobra.Command {
 			if warningDays == 0 {
 				warningDays = 7
 			}
+			// Signals cancel stop; the background loops and the HTTP server all watch it.
+			stop, cancelSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancelSignals()
+
 			go func() {
 				ticker := time.NewTicker(24 * time.Hour)
 				defer ticker.Stop()
-				for range ticker.C {
+				for {
+					select {
+					case <-stop.Done():
+						return
+					case <-ticker.C:
+					}
 					within := time.Duration(warningDays) * 24 * time.Hour
 					grants, err := db.ListExpiringGrants(context.Background(), within)
 					if err != nil {
@@ -270,17 +279,17 @@ func serveCmd() *cobra.Command {
 			}
 			logger.Info("tpt-identity server starting", "addr", addr, "issuer", issuer)
 
-			stop, cancelSignals := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-			defer cancelSignals()
 			errCh := make(chan error, 1)
 			go func() { errCh <- httpSrv.ListenAndServe() }()
 
 			select {
 			case err := <-errCh:
+				srv.Close()
 				return err
 			case <-stop.Done():
 			}
 			logger.Info("shutting down")
+			srv.Close()
 			shutdownCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 			defer cancel()
 			return httpSrv.Shutdown(shutdownCtx)
