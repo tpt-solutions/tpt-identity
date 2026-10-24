@@ -22,6 +22,10 @@ var ErrIssuerNotDID = errors.New("issuer must be a DID (did:web, did:peer or did
 
 var ErrEphemeralIssuer = errors.New("did:key is ephemeral and cannot be used as issuer for persistent credentials; use did:web or did:peer")
 
+// ErrVerificationMethodMismatch means the signing key does not belong to the issuer DID, so a
+// verifier resolving the issuer could not find the key that signed the credential.
+var ErrVerificationMethodMismatch = errors.New("verification method must be a key of the issuer DID (<issuer>#<fragment>)")
+
 // IssueOptions configures credential issuance.
 type IssueOptions struct {
 	// IssuerDID is the DID of the credential issuer.
@@ -52,6 +56,9 @@ func Issue(opts IssueOptions) (*VerifiableCredential, error) {
 	}
 	if strings.HasPrefix(opts.IssuerDID, "did:key:") {
 		return nil, ErrEphemeralIssuer
+	}
+	if !strings.HasPrefix(opts.VerificationMethodID, opts.IssuerDID+"#") {
+		return nil, ErrVerificationMethodMismatch
 	}
 	if err := schema.Validate(opts.SchemaID, opts.Claims); err != nil {
 		return nil, fmt.Errorf("issue: %w", err)

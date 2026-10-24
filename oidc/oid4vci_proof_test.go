@@ -130,7 +130,7 @@ func TestPreAuthCredentialFlow(t *testing.T) {
 		}
 		return []ed25519.PublicKey{holderPub}, nil
 	})
-	h := p.CredentialHandler(issuerPriv, "key-1", st)
+	h := p.CredentialHandler(issuerPriv, "did:web:issuer.example.com#key-1", st)
 	seedLegalName(t, st, issuerPriv)
 
 	token, cNonce := preAuthSetup(t, st, p)
@@ -158,7 +158,7 @@ func TestCredentialProofRejections(t *testing.T) {
 	p.SetHolderKeyResolver(func(context.Context, string) ([]ed25519.PublicKey, error) {
 		return []ed25519.PublicKey{holderPub}, nil
 	})
-	h := p.CredentialHandler(issuerPriv, "key-1", st)
+	h := p.CredentialHandler(issuerPriv, "did:web:issuer.example.com#key-1", st)
 	now := time.Now().Unix()
 
 	cases := map[string]func(cNonce string) string{
@@ -217,7 +217,7 @@ func TestCredentialEndpointRefusesWithoutHolderResolver(t *testing.T) {
 	_, issuerPriv, _ := crypto.GenerateSigningKey()
 	holderPub, holderPriv, _ := crypto.GenerateSigningKey()
 	p := oidc.NewProvider(proofIssuer, issuerPriv, "key-1", st) // no SetHolderKeyResolver
-	h := p.CredentialHandler(issuerPriv, "key-1", st)
+	h := p.CredentialHandler(issuerPriv, "did:web:issuer.example.com#key-1", st)
 
 	token, cNonce := preAuthSetup(t, st, p)
 	w := credentialRequest(t, h, token, makeProof(t, holderPriv, holderPub, proofHolder, proofIssuer, cNonce, time.Now().Unix()))
