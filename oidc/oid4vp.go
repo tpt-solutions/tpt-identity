@@ -12,10 +12,14 @@ package oidc
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"sync"
 	"time"
+
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	vcpkg "github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // OID4VPRequest is an OID4VP authorization request.
@@ -54,17 +58,10 @@ type OID4VPStore struct {
 }
 
 func newOID4VPStore() *OID4VPStore {
-	s := &OID4VPStore{
+	return &OID4VPStore{
 		requests:  make(map[string]*OID4VPRequest),
 		responses: make(map[string]*OID4VPResponse),
 	}
-	// Periodic cleanup of expired entries.
-	go func() {
-		for range time.Tick(5 * time.Minute) {
-			s.evict()
-		}
-	}()
-	return s
 }
 
 func (s *OID4VPStore) evict() {
@@ -84,11 +81,55 @@ func (s *OID4VPStore) evict() {
 type OID4VPHandler struct {
 	p     *Provider
 	store *OID4VPStore
+	// resolver resolves holder and issuer DIDs when a presentation is verified. Without it,
+	// every response is refused.
+	resolver *resolver.Resolver
 }
 
 // NewOID4VPHandler creates a new OID4VP handler attached to the given provider.
 func NewOID4VPHandler(p *Provider) *OID4VPHandler {
 	return &OID4VPHandler{p: p, store: newOID4VPStore()}
+}
+
+// SetResolver sets the DID resolver used to verify presentations.
+func (h *OID4VPHandler) SetResolver(r *resolver.Resolver) {
+	h.resolver = r
+}
+
+// liveRequest returns the unexpired request with the given state.
+func (h *OID4VPHandler) liveRequest(state string) (*OID4VPRequest, error) {
+	h.store.mu.RLock()
+	defer h.store.mu.RUnlock()
+	req, ok := h.store.requests[state]
+	if !ok || time.Now().After(req.ExpiresAt) {
+		return nil, errors.New("unknown or expired request state")
+	}
+	return req, nil
+}
+
+// verifyVPToken checks a JSON verifiable presentation against the request. The holder's proof
+// must cover the request nonce and be addressed to the request's client_id; every enclosed
+// credential must verify and name the presenting holder as its subject.
+func (h *OID4VPHandler) verifyVPToken(vpToken string, req *OID4VPRequest) error {
+	if h.resolver == nil {
+		return errors.New("presentation verification is not configured")
+	}
+	var vp vcpkg.VerifiablePresentation
+	if err := json.Unmarshal([]byte(vpToken), &vp); err != nil {
+		return fmt.Errorf("vp_token must be a JSON verifiable presentation: %w", err)
+	}
+	if err := vcpkg.NewVerifier(h.resolver).VerifyPresentation(&vp, vcpkg.VerifyPresentationOptions{
+		ExpectedChallenge: req.Nonce,
+		ExpectedDomain:    req.ClientID,
+	}); err != nil {
+		return err
+	}
+	for i, cred := range vp.VerifiableCredential {
+		if cred.CredentialSubject.ID != vp.Holder {
+			return fmt.Errorf("credential[%d] subject does not match the presenting holder", i)
+		}
+	}
+	return nil
 }
 
 // CreateRequestHandler handles POST /oid4vp/requests — creates a presentation request.
@@ -139,6 +180,7 @@ func (h *OID4VPHandler) CreateRequestHandler(w http.ResponseWriter, r *http.Requ
 		CreatedAt:              time.Now(),
 	}
 
+	h.store.evict()
 	h.store.mu.Lock()
 	h.store.requests[id] = pReq
 	h.store.mu.Unlock()
@@ -216,6 +258,17 @@ func (h *OID4VPHandler) PostResponseHandler(w http.ResponseWriter, r *http.Reque
 	state := r.FormValue("state") // correlates to request ID
 	if vpToken == "" {
 		writeError(w, "invalid_request", "vp_token required")
+		return
+	}
+
+	// Verify before storing: a presentation that fails is not recorded, so the wallet may retry.
+	pReq, err := h.liveRequest(state)
+	if err != nil {
+		writeError(w, "invalid_request", err.Error())
+		return
+	}
+	if err := h.verifyVPToken(vpToken, pReq); err != nil {
+		writeErrorStatus(w, http.StatusUnprocessableEntity, "invalid_vp_token", err.Error())
 		return
 	}
 
