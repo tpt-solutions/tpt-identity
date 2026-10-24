@@ -18,7 +18,7 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	crewsaml "github.com/crewjam/saml"
 )
 

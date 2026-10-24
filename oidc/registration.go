@@ -12,8 +12,8 @@ import (
 	"slices"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/netguard"
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/netguard"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // maxRegistrationBody caps the registration request body.

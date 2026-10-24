@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // issueCredentialRequest is the JSON body for POST /api/v1/credentials.

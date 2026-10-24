@@ -7,8 +7,8 @@ import (
 	"encoding/json"
 	"log/slog"
 
-	"github.com/PhillipC05/tpt-identity/internal/events"
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/events"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // Logger appends all platform events to the verifiable audit log.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PhillipC05/tpt-identity/pkg/schema"
-	_ "github.com/PhillipC05/tpt-identity/pkg/schema/core"
+	"github.com/tpt-solutions/tpt-identity/pkg/schema"
+	_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"
 )
 
 // ---- Registry ----

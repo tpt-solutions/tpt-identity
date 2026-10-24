@@ -19,9 +19,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/pkg/schema"
-	vcpkg "github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/pkg/schema"
+	vcpkg "github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // CredentialIssuerMetadataHandler serves GET /.well-known/openid-credential-issuer

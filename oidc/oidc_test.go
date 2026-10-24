@@ -11,9 +11,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/oidc"
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/oidc"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 // ---- JWT issuance + verification ----

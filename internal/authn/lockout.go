@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // LockoutManager enforces per-identity brute-force lockout.

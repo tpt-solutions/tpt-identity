@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
 	"github.com/spf13/cobra"
 )
 

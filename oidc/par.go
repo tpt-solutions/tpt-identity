@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 const parTTL = 90 * time.Second // RFC 9126 §2.1 recommends ≤ 90 s

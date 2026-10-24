@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 const defaultTTL = 5 * time.Minute

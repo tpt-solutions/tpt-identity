@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	tptcrypto "github.com/PhillipC05/tpt-identity/pkg/crypto"
-	"github.com/PhillipC05/tpt-identity/pkg/schema"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/schema"
 	"github.com/google/uuid"
 )
 

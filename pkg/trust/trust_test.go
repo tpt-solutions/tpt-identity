@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
-	"github.com/PhillipC05/tpt-identity/pkg/trust"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/trust"
 )
 
 // ---- Permit ----

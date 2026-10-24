@@ -11,7 +11,7 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	ldap "github.com/go-ldap/ldap/v3"
 )
 

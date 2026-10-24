@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/consent"
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
-	_ "github.com/PhillipC05/tpt-identity/pkg/schema/core"
+	"github.com/tpt-solutions/tpt-identity/pkg/consent"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"
 )
 
 const (

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"time"
 
-	tptcrypto "github.com/PhillipC05/tpt-identity/pkg/crypto"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/google/uuid"
 )
 

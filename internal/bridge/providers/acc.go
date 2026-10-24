@@ -16,7 +16,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 )
 
 // ACCConfig configures the ACC OAuth2 bridge.

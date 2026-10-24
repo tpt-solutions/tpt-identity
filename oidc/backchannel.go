@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/netguard"
+	"github.com/tpt-solutions/tpt-identity/internal/netguard"
 )
 
 // SendBackChannelLogout delivers a signed logout_token to the client's

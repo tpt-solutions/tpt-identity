@@ -19,8 +19,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
-	"github.com/PhillipC05/tpt-identity/oidc"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
+	"github.com/tpt-solutions/tpt-identity/oidc"
 )
 
 // OIDCRPConfig configures an upstream OIDC/OAuth2 provider.

@@ -13,8 +13,8 @@ import (
 	"github.com/go-webauthn/webauthn/protocol"
 	"github.com/google/uuid"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 // waSessionEntry holds transient WebAuthn session data between Begin and Finish.

@@ -6,9 +6,9 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
-	"github.com/PhillipC05/tpt-identity/pkg/keystore"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/keystore"
 )
 
 type createIdentityRequest struct {

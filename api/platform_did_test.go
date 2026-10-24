@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/PhillipC05/tpt-identity/api"
+	"github.com/tpt-solutions/tpt-identity/api"
 )
 
 func TestPlatformDIDEncoding(t *testing.T) {

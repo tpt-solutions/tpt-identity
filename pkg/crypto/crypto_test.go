@@ -3,7 +3,7 @@ package crypto_test
 import (
 	"testing"
 
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 func TestSignVerifyRoundTrip(t *testing.T) {

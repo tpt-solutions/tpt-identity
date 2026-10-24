@@ -15,10 +15,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/authn"
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
-	bridgeproviders "github.com/PhillipC05/tpt-identity/internal/bridge/providers"
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/internal/authn"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
+	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // ─── State token helpers ────────────────────────────────────────────────────

@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/pkg/recovery"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/pkg/recovery"
 )
 
 // recoveryRequestTTL bounds how long a recovery request can collect approvals.

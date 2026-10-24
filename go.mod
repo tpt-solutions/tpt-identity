@@ -1,4 +1,4 @@
-module github.com/PhillipC05/tpt-identity
+module github.com/tpt-solutions/tpt-identity
 
 go 1.25.0
 

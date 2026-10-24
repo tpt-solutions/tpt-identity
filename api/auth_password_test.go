@@ -10,15 +10,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/api"
-	"github.com/PhillipC05/tpt-identity/internal/authn"
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
-	bridgeproviders "github.com/PhillipC05/tpt-identity/internal/bridge/providers"
-	"github.com/PhillipC05/tpt-identity/internal/events"
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/oidc"
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/api"
+	"github.com/tpt-solutions/tpt-identity/internal/authn"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
+	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
+	"github.com/tpt-solutions/tpt-identity/internal/events"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/oidc"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 const (

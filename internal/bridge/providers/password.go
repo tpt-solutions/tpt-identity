@@ -10,7 +10,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	"golang.org/x/crypto/argon2"
 )
 

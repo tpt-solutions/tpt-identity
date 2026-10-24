@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/api"
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/oidc"
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
-	_ "github.com/PhillipC05/tpt-identity/pkg/schema/core"
+	"github.com/tpt-solutions/tpt-identity/api"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/oidc"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core"
 )
 
 // consentServer returns a server and bearer tokens for two subjects.

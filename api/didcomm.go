@@ -11,8 +11,8 @@ import (
 
 	"github.com/multiformats/go-multibase"
 
-	"github.com/PhillipC05/tpt-identity/pkg/did"
-	"github.com/PhillipC05/tpt-identity/pkg/didcomm"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/didcomm"
 )
 
 // handleDIDCommReceive handles POST /didcomm.

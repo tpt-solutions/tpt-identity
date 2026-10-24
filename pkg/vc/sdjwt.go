@@ -21,8 +21,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
-	"github.com/PhillipC05/tpt-identity/pkg/schema"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/pkg/schema"
 )
 
 // ──────────────────────────────────────────────────────────────────────────────

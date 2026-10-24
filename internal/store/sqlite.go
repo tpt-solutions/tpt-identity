@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/consent"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/pkg/consent"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 	_ "modernc.org/sqlite"
 )
 

@@ -12,7 +12,7 @@ import (
 	"io"
 	"os"
 
-	tptcrypto "github.com/PhillipC05/tpt-identity/pkg/crypto"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"golang.org/x/crypto/argon2"
 	"golang.org/x/crypto/curve25519"
 )

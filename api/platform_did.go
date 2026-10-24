@@ -9,8 +9,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 // PlatformDID returns the did:web identifier for the server at issuer, for example

@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	bridgeproviders "github.com/PhillipC05/tpt-identity/internal/bridge/providers"
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // PasswordResetSender delivers a password-reset token to the account holder out of band.

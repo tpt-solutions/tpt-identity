@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/PhillipC05/tpt-identity/internal/authn"
+	"github.com/tpt-solutions/tpt-identity/internal/authn"
 )
 
 // handleDuressEnrol sets (or replaces) the duress passphrase for the authenticated subject.

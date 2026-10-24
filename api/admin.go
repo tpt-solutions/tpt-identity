@@ -6,7 +6,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // ── Admin API (/admin/v1/) ────────────────────────────────────────────────────

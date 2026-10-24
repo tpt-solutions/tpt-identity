@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // handleBatchIssueCredentials handles POST /api/v1/credentials/batch.

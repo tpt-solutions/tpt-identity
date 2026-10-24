@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/schema"
+	"github.com/tpt-solutions/tpt-identity/pkg/schema"
 )
 
 // GrantLevel describes the scope of a consent grant.

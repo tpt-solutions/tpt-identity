@@ -20,7 +20,7 @@ import (
 
 	"golang.org/x/crypto/argon2"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 const (

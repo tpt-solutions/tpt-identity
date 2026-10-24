@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // handleGetPrivacyBudget handles GET /api/v1/me/privacy-budget.

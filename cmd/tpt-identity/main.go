@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/PhillipC05/tpt-identity/cmd/tpt-identity/cmd"
+	"github.com/tpt-solutions/tpt-identity/cmd/tpt-identity/cmd"
 )
 
 func main() {

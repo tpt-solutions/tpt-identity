@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 func pubBytes(t *testing.T) []byte {

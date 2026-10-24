@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/store"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 // BootstrapFunc is called after a new platform identity is created from an

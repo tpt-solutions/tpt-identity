@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // PresentationSubmission maps a presented VP to a PresentationDefinition.

@@ -6,11 +6,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
-	"github.com/PhillipC05/tpt-identity/pkg/crypto"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
-	_ "github.com/PhillipC05/tpt-identity/pkg/schema/core" // register core schemas
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
+	_ "github.com/tpt-solutions/tpt-identity/pkg/schema/core" // register core schemas
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // testIssuer creates a did:peer with a fresh keypair.

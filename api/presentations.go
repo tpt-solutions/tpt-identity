@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/pe"
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/pkg/pe"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // presentationRequestTTL is how long a verifier's request accepts a presentation.

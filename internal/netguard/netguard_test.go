@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/netguard"
+	"github.com/tpt-solutions/tpt-identity/internal/netguard"
 )
 
 func TestIsPublicIP(t *testing.T) {

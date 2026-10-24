@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/bridge"
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 const magicLinkTTL = 15 * time.Minute

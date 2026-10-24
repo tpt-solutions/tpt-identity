@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	tptcrypto "github.com/PhillipC05/tpt-identity/pkg/crypto"
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
-	"github.com/PhillipC05/tpt-identity/pkg/did"
+	tptcrypto "github.com/tpt-solutions/tpt-identity/pkg/crypto"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 	"github.com/multiformats/go-multibase"
 )
 

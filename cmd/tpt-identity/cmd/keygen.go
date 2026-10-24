@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/PhillipC05/tpt-identity/pkg/did"
-	"github.com/PhillipC05/tpt-identity/pkg/keystore"
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
+	"github.com/tpt-solutions/tpt-identity/pkg/keystore"
 	"github.com/spf13/cobra"
 )
 

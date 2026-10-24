@@ -6,8 +6,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/keystore"
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/pkg/keystore"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 	"github.com/spf13/cobra"
 )
 

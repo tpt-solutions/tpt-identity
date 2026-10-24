@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
-	vcpkg "github.com/PhillipC05/tpt-identity/pkg/vc"
+	vcpkg "github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
 // handleIssueAgeProof handles POST /api/v1/credentials/zkp/age.

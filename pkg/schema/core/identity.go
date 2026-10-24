@@ -1,6 +1,6 @@
 package core
 
-import "github.com/PhillipC05/tpt-identity/pkg/schema"
+import "github.com/tpt-solutions/tpt-identity/pkg/schema"
 
 func init() {
 	schema.RegisterCategory(schema.Category{

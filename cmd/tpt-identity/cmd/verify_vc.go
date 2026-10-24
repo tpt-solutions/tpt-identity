@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/resolver"
-	"github.com/PhillipC05/tpt-identity/pkg/vc"
+	"github.com/tpt-solutions/tpt-identity/internal/resolver"
+	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 	"github.com/spf13/cobra"
 )
 

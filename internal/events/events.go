@@ -14,8 +14,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/internal/netguard"
-	"github.com/PhillipC05/tpt-identity/internal/store"
+	"github.com/tpt-solutions/tpt-identity/internal/netguard"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // Event types published by the platform.

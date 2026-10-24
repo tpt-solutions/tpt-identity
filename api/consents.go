@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/PhillipC05/tpt-identity/pkg/consent"
-	"github.com/PhillipC05/tpt-identity/pkg/schema"
+	"github.com/tpt-solutions/tpt-identity/pkg/consent"
+	"github.com/tpt-solutions/tpt-identity/pkg/schema"
 )
 
 // handleListGrants lists the caller's own consent grants (including revoked ones, for the audit trail).
