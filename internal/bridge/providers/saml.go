@@ -18,8 +18,8 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	crewsaml "github.com/crewjam/saml"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 )
 
 // SAMLConfig configures a SAML 2.0 SP bridge for a specific IdP.
@@ -162,7 +162,7 @@ func (b *SAMLBridge) PrepareAuth(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("saml: make authn request: %w", err)
 	}
 	// Redirect without RelayState — the caller appends it after signing the bridge state.
-	redirectURL, err := authReq.Redirect("")
+	redirectURL, err := authReq.Redirect("", &b.serviceProvider)
 	if err != nil {
 		return "", "", fmt.Errorf("saml: build redirect URL: %w", err)
 	}

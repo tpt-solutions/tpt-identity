@@ -16,8 +16,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	crewsaml "github.com/crewjam/saml"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 )
 
 // RealMeTier represents the assurance tier of a RealMe integration.

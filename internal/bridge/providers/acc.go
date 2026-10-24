@@ -78,7 +78,7 @@ func (b *ACCBridge) AuthorizationURL(ctx context.Context, state string) (string,
 
 // ExchangeCode exchanges the authorization code for an ACC access token and
 // returns the normalized ExternalIdentity.
-func (b *ACCBridge) ExchangeCode(ctx context.Context, code string) (*bridge.ExternalIdentity, error) {
+func (b *ACCBridge) ExchangeCode(ctx context.Context, code, _ string) (*bridge.ExternalIdentity, error) {
 	resp, err := http.PostForm(b.cfg.TokenEndpoint, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},

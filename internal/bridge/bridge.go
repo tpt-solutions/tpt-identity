@@ -32,7 +32,7 @@ type Bridge interface {
 type RedirectBridge interface {
 	Bridge
 	AuthorizationURL(ctx context.Context, state string) (string, error)
-	ExchangeCode(ctx context.Context, code string) (*ExternalIdentity, error)
+	ExchangeCode(ctx context.Context, code, state string) (*ExternalIdentity, error)
 }
 
 // SAMLBridgeHandler is implemented by SAML 2.0 bridge providers.
@@ -52,8 +52,8 @@ type SAMLBridgeHandler interface {
 
 // Manager holds the registered bridge providers.
 type Manager struct {
-	mu       sync.RWMutex
-	bridges  map[string]Bridge
+	mu      sync.RWMutex
+	bridges map[string]Bridge
 }
 
 // NewManager creates an empty bridge manager.

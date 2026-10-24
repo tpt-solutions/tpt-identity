@@ -78,7 +78,7 @@ func (b *MagicLinkBridge) VerifyToken(ctx context.Context, rawToken string) (*br
 	return &bridge.ExternalIdentity{
 		Provider:   b.Name(),
 		ExternalID: t.Email,
-		Claims:     map[string]string{"email": t.Email},
+		Claims:     map[string]string{"email": t.Email, "email_verified": "true"}, // possession of the mailbox proves the address
 	}, nil
 }
 

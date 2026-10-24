@@ -99,7 +99,7 @@ func (b *TeWhatuOraBridge) AuthorizationURL(ctx context.Context, state string) (
 
 // ExchangeCode exchanges the authorization code, fetches the FHIR resource to
 // obtain the NHI/HPI number, and returns the normalized ExternalIdentity.
-func (b *TeWhatuOraBridge) ExchangeCode(ctx context.Context, code string) (*bridge.ExternalIdentity, error) {
+func (b *TeWhatuOraBridge) ExchangeCode(ctx context.Context, code, _ string) (*bridge.ExternalIdentity, error) {
 	resp, err := http.PostForm(b.cfg.TokenEndpoint, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
@@ -119,7 +119,7 @@ func (b *TeWhatuOraBridge) ExchangeCode(ctx context.Context, code string) (*brid
 	var tok struct {
 		AccessToken string `json:"access_token"`
 		// patient is the FHIR Patient resource ID (present for patient-level scopes).
-		Patient  string `json:"patient"`
+		Patient string `json:"patient"`
 		// fhirUser is the full FHIR resource URL for the authenticated user, e.g. "Patient/ZCX7823".
 		FHIRUser string `json:"fhirUser"`
 	}

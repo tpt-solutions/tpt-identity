@@ -170,8 +170,10 @@ func computeHMAC(body []byte, secret string) string {
 }
 
 func extractEventID(body []byte) string {
-	var e struct{ ID string `json:"id"` }
-	json.Unmarshal(body, &e)
+	var e struct {
+		ID string `json:"id"`
+	}
+	_ = json.Unmarshal(body, &e) // a malformed body yields an empty ID
 	return e.ID
 }
 

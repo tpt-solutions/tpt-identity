@@ -11,8 +11,8 @@ import (
 	"fmt"
 	"net/http"
 
-	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	ldap "github.com/go-ldap/ldap/v3"
+	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 )
 
 // LDAPConfig configures the LDAP/Active Directory bridge.
@@ -103,7 +103,7 @@ func (b *LDAPBridge) VerifyCredentials(ctx context.Context, identifier, password
 	}
 	if len(result.Entries) == 0 {
 		// Constant-time: don't reveal whether user exists.
-		_, _ = conn.Bind("cn=nonexistent,dc=invalid", "wrongpassword")
+		_ = conn.Bind("cn=nonexistent,dc=invalid", "wrongpassword")
 		return nil, errors.New("ldap: invalid credentials")
 	}
 	if len(result.Entries) > 1 {

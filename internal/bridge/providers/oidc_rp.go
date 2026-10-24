@@ -8,6 +8,8 @@ import (
 	"crypto/ed25519"
 	"crypto/elliptic"
 	"crypto/rsa"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -15,6 +17,7 @@ import (
 	"math/big"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -40,9 +43,9 @@ type OIDCRPConfig struct {
 
 // OIDCRPBridge implements bridge.Bridge for an upstream OIDC/OAuth2 provider.
 type OIDCRPBridge struct {
-	cfg         OIDCRPConfig
-	mu          sync.RWMutex
-	discovered  *oidcDiscovery
+	cfg          OIDCRPConfig
+	mu           sync.RWMutex
+	discovered   *oidcDiscovery
 	discoveredAt time.Time
 }
 
@@ -81,20 +84,21 @@ func (b *OIDCRPBridge) AuthorizationURL(ctx context.Context, state string) (stri
 		"redirect_uri":  {b.callbackURL()},
 		"scope":         {strings.Join(b.cfg.Scopes, " ")},
 		"state":         {state},
+		"nonce":         {upstreamNonce(state)},
 	}
 	return disc.AuthorizationEndpoint + "?" + params.Encode(), nil
 }
 
 // ExchangeCode exchanges the authorization code for an upstream id_token and returns
 // the normalized ExternalIdentity.
-func (b *OIDCRPBridge) ExchangeCode(ctx context.Context, code string) (*bridge.ExternalIdentity, error) {
+func (b *OIDCRPBridge) ExchangeCode(ctx context.Context, code, state string) (*bridge.ExternalIdentity, error) {
 	disc, err := b.discover(ctx)
 	if err != nil {
 		return nil, err
 	}
 
 	// Exchange code for tokens.
-	resp, err := http.PostForm(disc.TokenEndpoint, url.Values{
+	resp, err := upstreamClient.PostForm(disc.TokenEndpoint, url.Values{
 		"grant_type":    {"authorization_code"},
 		"code":          {code},
 		"redirect_uri":  {b.callbackURL()},
@@ -121,10 +125,10 @@ func (b *OIDCRPBridge) ExchangeCode(ctx context.Context, code string) (*bridge.E
 	}
 
 	// Verify the upstream id_token.
-	return b.verifyIDToken(ctx, disc, tokenResp.IDToken)
+	return b.verifyIDToken(ctx, disc, tokenResp.IDToken, upstreamNonce(state))
 }
 
-func (b *OIDCRPBridge) verifyIDToken(ctx context.Context, disc *oidcDiscovery, idToken string) (*bridge.ExternalIdentity, error) {
+func (b *OIDCRPBridge) verifyIDToken(ctx context.Context, disc *oidcDiscovery, idToken, expectedNonce string) (*bridge.ExternalIdentity, error) {
 	// Parse header to find the key ID.
 	header, err := oidc.ParseHeader(idToken)
 	if err != nil {
@@ -160,33 +164,83 @@ func (b *OIDCRPBridge) verifyIDToken(ctx context.Context, disc *oidcDiscovery, i
 		return nil, fmt.Errorf("oidc_rp: verify signature: %w", err)
 	}
 
-	// Parse claims.
-	claims, err := oidc.ParseUnverified(idToken)
-	if err != nil {
+	// The signature is verified above. Claims are read from the raw payload so an array-valued
+	// aud is handled and every check below sees the same values.
+	var raw map[string]any
+	if err := parseRawClaims(idToken, &raw); err != nil {
 		return nil, fmt.Errorf("oidc_rp: parse claims: %w", err)
 	}
-	if claims.ExpiresAt < time.Now().Unix() {
+	iss, _ := raw["iss"].(string)
+	sub, _ := raw["sub"].(string)
+	exp, _ := raw["exp"].(float64)
+	if int64(exp) < time.Now().Unix() {
 		return nil, errors.New("oidc_rp: id_token expired")
 	}
-	if claims.Subject == "" {
+	if strings.TrimRight(iss, "/") != strings.TrimRight(b.cfg.Issuer, "/") {
+		return nil, errors.New("oidc_rp: id_token iss does not match the configured issuer")
+	}
+	if !audienceIncludes(raw["aud"], b.cfg.ClientID) {
+		return nil, errors.New("oidc_rp: id_token aud does not include this client")
+	}
+	nonce, _ := raw["nonce"].(string)
+	if subtle.ConstantTimeCompare([]byte(nonce), []byte(expectedNonce)) != 1 {
+		return nil, errors.New("oidc_rp: id_token nonce does not match this login")
+	}
+	if sub == "" {
 		return nil, errors.New("oidc_rp: missing sub claim")
 	}
 
 	ext := &bridge.ExternalIdentity{
 		Provider:   b.cfg.Name,
-		ExternalID: claims.Subject, // stable — never use email as ExternalID
-		Claims:     map[string]string{"iss": claims.Issuer},
+		ExternalID: sub, // stable — never use email as ExternalID
+		Claims:     map[string]string{"iss": iss},
 	}
-	// Pull additional claims from a raw parse.
-	var raw map[string]any
-	if err := parseRawClaims(idToken, &raw); err == nil {
-		for _, field := range []string{"email", "given_name", "family_name", "name", "picture"} {
-			if v, ok := raw[field].(string); ok {
-				ext.Claims[field] = v
+	for _, field := range []string{"email", "given_name", "family_name", "name", "picture"} {
+		if v, ok := raw[field].(string); ok {
+			ext.Claims[field] = v
+		}
+	}
+	// Consumers that trust an email address (bootstrap credentials) must check this flag.
+	ext.Claims["email_verified"] = strconv.FormatBool(emailVerified(raw["email_verified"]))
+	return ext, nil
+}
+
+// upstreamClient bounds every call to an upstream provider, so a slow or hostile IdP cannot pin
+// a login request open.
+var upstreamClient = &http.Client{Timeout: 10 * time.Second}
+
+// upstreamNonce derives the nonce sent to the upstream provider from the signed bridge state.
+// The value is bound to the login that started the flow, so an id_token minted for another
+// login is refused.
+func upstreamNonce(state string) string {
+	sum := sha256.Sum256([]byte("tpt-identity-nonce:" + state))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+
+// audienceIncludes reports whether an aud claim (a string or an array of strings) names clientID.
+func audienceIncludes(aud any, clientID string) bool {
+	switch v := aud.(type) {
+	case string:
+		return v == clientID
+	case []any:
+		for _, a := range v {
+			if s, ok := a.(string); ok && s == clientID {
+				return true
 			}
 		}
 	}
-	return ext, nil
+	return false
+}
+
+// emailVerified reads the email_verified claim, which some providers send as a string.
+func emailVerified(v any) bool {
+	switch t := v.(type) {
+	case bool:
+		return t
+	case string:
+		return t == "true"
+	}
+	return false
 }
 
 func (b *OIDCRPBridge) callbackURL() string {
@@ -204,7 +258,7 @@ func (b *OIDCRPBridge) discover(ctx context.Context) (*oidcDiscovery, error) {
 
 	discURL := strings.TrimRight(b.cfg.Issuer, "/") + "/.well-known/openid-configuration"
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, discURL, nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstreamClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("oidc_rp: discovery fetch: %w", err)
 	}
@@ -237,7 +291,7 @@ type jwkKey struct {
 
 func (b *OIDCRPBridge) fetchJWKS(ctx context.Context, uri string) ([]jwkKey, error) {
 	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, uri, nil)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := upstreamClient.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -295,6 +349,9 @@ func jwkToPublicKey(k jwkKey) (crypto.PublicKey, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(xb) != ed25519.PublicKeySize {
+			return nil, errors.New("oidc_rp: Ed25519 jwk x is not 32 bytes")
+		}
 		return ed25519.PublicKey(xb), nil
 
 	default:
@@ -316,7 +373,9 @@ func verifyJWTSignature(token string, pub crypto.PublicKey) error {
 	// Get algorithm from header.
 	headerRaw, _ := base64.RawURLEncoding.DecodeString(parts[0])
 	var h map[string]string
-	json.Unmarshal(headerRaw, &h)
+	if err := json.Unmarshal(headerRaw, &h); err != nil {
+		return err
+	}
 	alg := h["alg"]
 
 	switch pk := pub.(type) {

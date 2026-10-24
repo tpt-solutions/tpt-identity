@@ -175,33 +175,33 @@ type Store interface {
 
 // Identity records a registered DID and its associated key material.
 type Identity struct {
-	DID           string    `json:"did"`
-	Method        string    `json:"method"` // "web", "key", "peer", "ion"
+	DID            string    `json:"did"`
+	Method         string    `json:"method"` // "web", "key", "peer", "ion"
 	SigningKeyPath string    `json:"signingKeyPath,omitempty"`
-	EncKeyPath    string    `json:"encKeyPath,omitempty"`
-	Role          string    `json:"role"` // "user", "operator", "admin"
-	TenantID      string    `json:"tenantId,omitempty"`
-	CreatedAt     time.Time `json:"createdAt"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	EncKeyPath     string    `json:"encKeyPath,omitempty"`
+	Role           string    `json:"role"` // "user", "operator", "admin"
+	TenantID       string    `json:"tenantId,omitempty"`
+	CreatedAt      time.Time `json:"createdAt"`
+	UpdatedAt      time.Time `json:"updatedAt"`
 }
 
 // OIDCSession tracks an in-progress or completed OIDC authorization code flow.
 type OIDCSession struct {
-	ID               string     `json:"id"`
-	SubjectDID       string     `json:"subjectDid"`
-	ClientID         string     `json:"clientId"`
-	RedirectURI      string     `json:"redirectUri"`
-	Scope            string     `json:"scope"`
-	Nonce            string     `json:"nonce,omitempty"`
-	State            string     `json:"state,omitempty"`
-	Code             string     `json:"code,omitempty"`
+	ID          string `json:"id"`
+	SubjectDID  string `json:"subjectDid"`
+	ClientID    string `json:"clientId"`
+	RedirectURI string `json:"redirectUri"`
+	Scope       string `json:"scope"`
+	Nonce       string `json:"nonce,omitempty"`
+	State       string `json:"state,omitempty"`
+	Code        string `json:"code,omitempty"`
 	// PKCE (RFC 7636) — S256 is the only accepted method.
-	CodeChallenge       string `json:"codeChallenge,omitempty"`
-	CodeChallengeMethod string `json:"codeChallengeMethod,omitempty"` // always "S256"
-	AccessToken         string `json:"accessToken,omitempty"`
-	RefreshTokenHash    string `json:"refreshTokenHash,omitempty"`
-	UserAgent           string `json:"userAgent,omitempty"`
-	IPAddress           string `json:"ipAddress,omitempty"`
+	CodeChallenge       string     `json:"codeChallenge,omitempty"`
+	CodeChallengeMethod string     `json:"codeChallengeMethod,omitempty"` // always "S256"
+	AccessToken         string     `json:"accessToken,omitempty"`
+	RefreshTokenHash    string     `json:"refreshTokenHash,omitempty"`
+	UserAgent           string     `json:"userAgent,omitempty"`
+	IPAddress           string     `json:"ipAddress,omitempty"`
 	LastUsedAt          *time.Time `json:"lastUsedAt,omitempty"`
 	CreatedAt           time.Time  `json:"createdAt"`
 	ExpiresAt           time.Time  `json:"expiresAt"`
@@ -209,15 +209,15 @@ type OIDCSession struct {
 
 // OIDCClient is a registered OIDC/OAuth2 client (RFC 7591).
 type OIDCClient struct {
-	ClientID                string    `json:"clientId"`
-	ClientSecretHash        string    `json:"-"`
-	ClientName              string    `json:"clientName"`
-	RedirectURIs            []string  `json:"redirectUris"`
-	TokenEndpointAuthMethod string    `json:"tokenEndpointAuthMethod"`
-	GrantTypes              []string  `json:"grantTypes"`
-	ResponseTypes           []string  `json:"responseTypes"`
-	Scope                   string    `json:"scope,omitempty"`
-	TenantID                string    `json:"tenantId,omitempty"`
+	ClientID                string   `json:"clientId"`
+	ClientSecretHash        string   `json:"-"`
+	ClientName              string   `json:"clientName"`
+	RedirectURIs            []string `json:"redirectUris"`
+	TokenEndpointAuthMethod string   `json:"tokenEndpointAuthMethod"`
+	GrantTypes              []string `json:"grantTypes"`
+	ResponseTypes           []string `json:"responseTypes"`
+	Scope                   string   `json:"scope,omitempty"`
+	TenantID                string   `json:"tenantId,omitempty"`
 	// BackchannelLogoutURI is the OIDC Back-Channel Logout 1.0 URI. Optional.
 	BackchannelLogoutURI string `json:"backchannelLogoutUri,omitempty"`
 	// PostLogoutRedirectURIs are validated targets for RP-initiated logout (RFC 9596).
@@ -227,8 +227,8 @@ type OIDCClient struct {
 
 // RefreshToken stores a hashed refresh token for rotation.
 type RefreshToken struct {
-	Hash       string     `json:"hash"`      // sha256(raw_token)
-	FamilyID   string     `json:"familyId"`  // shared by every token in one rotation chain
+	Hash       string     `json:"hash"`     // sha256(raw_token)
+	FamilyID   string     `json:"familyId"` // shared by every token in one rotation chain
 	SubjectDID string     `json:"subjectDid"`
 	ClientID   string     `json:"clientId"`
 	Scope      string     `json:"scope"`
@@ -248,8 +248,8 @@ type ExternalProviderLink struct {
 
 // MagicLinkToken is a one-time-use token for email-based passwordless auth.
 type MagicLinkToken struct {
-	Hash      string    `json:"hash"`      // sha256(raw_token)
-	Email     string    `json:"email"`     // normalised email address
+	Hash      string    `json:"hash"`  // sha256(raw_token)
+	Email     string    `json:"email"` // normalised email address
 	ExpiresAt time.Time `json:"expiresAt"`
 	CreatedAt time.Time `json:"createdAt"`
 }
@@ -282,14 +282,14 @@ type TOTPCredential struct {
 
 // WebhookSubscription registers a URL to receive platform events.
 type WebhookSubscription struct {
-	ID         string    `json:"id"`
-	URL        string    `json:"url"`
-	EventTypes []string  `json:"eventTypes"` // e.g. ["credential.issued", "consent.granted"]
+	ID         string   `json:"id"`
+	URL        string   `json:"url"`
+	EventTypes []string `json:"eventTypes"` // e.g. ["credential.issued", "consent.granted"]
 	// SigningSecret is the raw HMAC key for delivery payloads. The receiver holds the same
 	// value, so it must be stored and cannot be hashed. Never serialised to API callers.
-	SigningSecret string `json:"-"`
-	TenantID   string    `json:"tenantId,omitempty"`
-	CreatedAt  time.Time `json:"createdAt"`
+	SigningSecret string    `json:"-"`
+	TenantID      string    `json:"tenantId,omitempty"`
+	CreatedAt     time.Time `json:"createdAt"`
 }
 
 // AuditEvent is a single entry in the hash-chained verifiable audit log.
@@ -305,7 +305,7 @@ type AuditEvent struct {
 // RecoveryConfig stores the guardian configuration for M-of-N key recovery.
 type RecoveryConfig struct {
 	SubjectDID   string    `json:"subject_did"`
-	Threshold    int       `json:"threshold"`    // minimum guardians required
+	Threshold    int       `json:"threshold"` // minimum guardians required
 	GuardianDIDs []string  `json:"guardian_dids"`
 	CreatedAt    time.Time `json:"created_at"`
 }
@@ -341,16 +341,16 @@ type PARRequest struct {
 
 // DeviceCode stores a device authorization flow state (RFC 8628).
 type DeviceCode struct {
-	DeviceCode   string     `json:"device_code"`
-	UserCode     string     `json:"user_code"`
-	ClientID     string     `json:"client_id"`
-	Scope        string     `json:"scope"`
-	SubjectDID   string     `json:"subject_did,omitempty"` // set when user approves
-	Approved     bool       `json:"approved"`
-	Denied       bool       `json:"denied"`
-	ExpiresAt    time.Time  `json:"expires_at"`
-	IntervalSecs int        `json:"interval_secs"`
-	CreatedAt    time.Time  `json:"created_at"`
+	DeviceCode   string    `json:"device_code"`
+	UserCode     string    `json:"user_code"`
+	ClientID     string    `json:"client_id"`
+	Scope        string    `json:"scope"`
+	SubjectDID   string    `json:"subject_did,omitempty"` // set when user approves
+	Approved     bool      `json:"approved"`
+	Denied       bool      `json:"denied"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	IntervalSecs int       `json:"interval_secs"`
+	CreatedAt    time.Time `json:"created_at"`
 }
 
 // PasswordResetToken is a one-time token for password reset (15-min TTL).
@@ -373,7 +373,7 @@ type PrivacyDisclosure struct {
 
 // CredentialOffer stores an OID4VCI credential offer (single-use, short-lived).
 type CredentialOffer struct {
-	ID         string    `json:"id"`         // embedded in openid-credential-offer:// URI
+	ID         string    `json:"id"` // embedded in openid-credential-offer:// URI
 	ClientID   string    `json:"client_id,omitempty"`
 	SchemaIDs  []string  `json:"schema_ids"` // credential types being offered
 	IssuerDID  string    `json:"issuer_did"`

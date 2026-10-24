@@ -15,7 +15,7 @@ import (
 // A duress passphrase is a secondary credential that authenticates normally
 // but fires a session.duress event — used to signal coercion silently.
 type DuressManager struct {
-	store  duressStore
+	store duressStore
 }
 
 type duressStore interface {
