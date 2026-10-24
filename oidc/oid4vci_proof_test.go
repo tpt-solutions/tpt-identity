@@ -3,7 +3,9 @@ package oidc_test
 import (
 	"context"
 	"crypto/ed25519"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -25,7 +27,14 @@ const (
 	proofIssuer = "https://issuer.example.com"
 	proofHolder = "did:peer:holder"
 	proofSchema = "identity.legal-name"
+	proofTxCode = "123456"
 )
+
+// txCodeHash is the SHA-256 the issuer stores for a PIN, as the offer handler computes it.
+func txCodeHash(pin string) string {
+	sum := sha256.Sum256([]byte(pin))
+	return hex.EncodeToString(sum[:])
+}
 
 func b64(b []byte) string { return base64.RawURLEncoding.EncodeToString(b) }
 
@@ -57,6 +66,7 @@ func preAuthSetup(t *testing.T, st store.Store, p *oidc.Provider) (accessToken, 
 		SchemaIDs:  []string{proofSchema},
 		IssuerDID:  "did:web:issuer.example.com",
 		SubjectDID: proofHolder,
+		TxCodeHash: txCodeHash(proofTxCode),
 		ExpiresAt:  time.Now().Add(time.Hour),
 		CreatedAt:  time.Now(),
 	})
@@ -66,6 +76,7 @@ func preAuthSetup(t *testing.T, st store.Store, p *oidc.Provider) (accessToken, 
 	form := url.Values{
 		"grant_type":          {"urn:ietf:params:oauth:grant-type:pre-authorized_code"},
 		"pre-authorized_code": {offerID},
+		"tx_code":             {proofTxCode},
 	}
 	r := httptest.NewRequest(http.MethodPost, "/token", strings.NewReader(form.Encode()))
 	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")

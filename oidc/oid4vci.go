@@ -14,10 +14,15 @@ import (
 	"bytes"
 	"context"
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math/big"
 	"net/http"
 	"slices"
 	"strings"
@@ -128,6 +133,11 @@ func (p *Provider) CreateCredentialOfferHandler(signingKey ed25519.PrivateKey, s
 			return
 		}
 
+		txCode, txHash, err := newTxCode()
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
 		offer := &store.CredentialOffer{
 			ID:         id,
 			ClientID:   req.ClientID,
@@ -136,6 +146,7 @@ func (p *Provider) CreateCredentialOfferHandler(signingKey ed25519.PrivateKey, s
 			SubjectDID: req.SubjectDID,
 			ExpiresAt:  time.Now().Add(ttl),
 			CreatedAt:  time.Now(),
+			TxCodeHash: txHash,
 		}
 		if err := st.SaveCredentialOffer(r.Context(), offer); err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -166,6 +177,8 @@ func (p *Provider) CreateCredentialOfferHandler(signingKey ed25519.PrivateKey, s
 			"deep_link":  deepLink,
 			"qr_data":    deepLink, // caller can render this as a QR code
 			"expires_at": offer.ExpiresAt,
+			// Shown once, to the operator, who passes it to the holder out of band.
+			"tx_code": txCode,
 		})
 	}
 }
@@ -193,7 +206,28 @@ func (p *Provider) handlePreAuthorizedCode(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	_ = st.MarkCredentialOfferUsed(r.Context(), preAuthCode)
+	// The PIN (tx_code) the issuer showed out of band must match. An offer without a stored PIN is
+	// refused. A wrong PIN burns the offer, so a PIN cannot be searched one guess at a time.
+	txCode := strings.TrimSpace(r.FormValue("tx_code"))
+	if offer.TxCodeHash == "" {
+		writeError(w, "invalid_grant", "offer has no tx_code and cannot be redeemed")
+		return
+	}
+	if txCode == "" {
+		writeError(w, "invalid_request", "tx_code required for this offer")
+		return
+	}
+	if !txCodeMatches(offer.TxCodeHash, txCode) {
+		_ = st.MarkCredentialOfferUsed(r.Context(), preAuthCode)
+		writeError(w, "invalid_grant", "tx_code is incorrect; the offer is no longer valid")
+		return
+	}
+
+	// Claim the offer. If another request claimed it first, this one fails.
+	if err := st.MarkCredentialOfferUsed(r.Context(), preAuthCode); err != nil {
+		writeError(w, "invalid_grant", "pre-authorized_code already used")
+		return
+	}
 
 	// Issue an access token scoped to the credential issuance. The scope lists exactly the
 	// schemas named in this offer, so the token cannot be used for any other credential type.
@@ -464,6 +498,26 @@ func (p *Provider) consumeCNonce(nonce string) bool {
 // hasScopeToken reports whether want appears as a whole token in a space-delimited scope string.
 func hasScopeToken(scope, want string) bool {
 	return slices.Contains(strings.Fields(scope), want)
+}
+
+// newTxCode returns a fresh six-digit PIN and the hex SHA-256 the server stores in its place.
+func newTxCode() (pin, hash string, err error) {
+	n, err := rand.Int(rand.Reader, big.NewInt(1000000))
+	if err != nil {
+		return "", "", fmt.Errorf("tx_code: %w", err)
+	}
+	pin = fmt.Sprintf("%06d", n.Int64())
+	return pin, txCodeHash(pin), nil
+}
+
+func txCodeHash(pin string) string {
+	sum := sha256.Sum256([]byte(pin))
+	return hex.EncodeToString(sum[:])
+}
+
+// txCodeMatches compares a presented PIN with the stored hash in constant time.
+func txCodeMatches(storedHash, presented string) bool {
+	return subtle.ConstantTimeCompare([]byte(storedHash), []byte(txCodeHash(presented))) == 1
 }
 
 func mustRandomHex(n int) string {
