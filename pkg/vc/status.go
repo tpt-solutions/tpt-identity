@@ -190,7 +190,27 @@ func CheckStatus(bits []byte, status *CredentialStatus) error {
 		return fmt.Errorf("status list: index %d out of range", idx)
 	}
 	if bits[byteIdx]&(1<<bitIdx) != 0 {
-		return errors.New("credential is revoked")
+		return ErrCredentialRevoked
 	}
 	return nil
 }
+
+// StatusListFromBytes rebuilds a status list from a stored bitstring, so a persisted list can be
+// revoked against and republished. bits must be the full byte slice produced by a StatusList.
+func StatusListFromBytes(id string, bits []byte) *StatusList {
+	cp := make([]byte, len(bits))
+	copy(cp, bits)
+	return &StatusList{id: id, bits: cp, size: len(cp) * 8}
+}
+
+// Bytes returns a copy of the raw bitstring, for persistence.
+func (s *StatusList) Bytes() []byte {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	cp := make([]byte, len(s.bits))
+	copy(cp, s.bits)
+	return cp
+}
+
+// ErrCredentialRevoked is returned by CheckStatus when the credential's bit is set.
+var ErrCredentialRevoked = errors.New("credential is revoked")
