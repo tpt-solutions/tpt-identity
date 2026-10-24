@@ -149,7 +149,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 ### 13.2 Security — high
 - [x] Access-token verify: check `iss`, `aud`, `token_type`; reject ID tokens at `/me/*` and `/userinfo`; persist revocation list (DB) and consult it everywhere
 - [x] Token-minting oracles: `stepup.go`, `oid4vp.go:497-504`, `token_exchange.go` (client auth, reject ID token as subject token, fail on bad actor token)
-- [ ] OID4VP response endpoint: validate `state`, verify VP + nonce, bound/evict maps, persist — state validation, one-response-per-request and bounded map done; VP signature/nonce verification and persistence still open
+- [ ] OID4VP response endpoint: validate `state`, verify VP + nonce, bound/evict maps, persist — state validation, one-response-per-request and bounded map done; VP signature/nonce verification and persistence still open — VP holder proof, nonce, client_id and credential subject are now verified before a response is stored; persistence and JWT-format VPs are still open
 - [x] Dynamic client registration: auth/rate class, redirect URI validation, enforce `grant_types` + scope, SSRF-guard `backchannel_logout_uri`, call `SendBackChannelLogout`, support post-logout URIs
 - [x] Atomic auth-code redemption and refresh rotation; revoke token family on replay
 - [x] Webhooks: connect-time IP-check dialer, no redirects, https only; fix HMAC signing (currently keyed by hash of secret); don't fan out `webhook.ping`
@@ -160,7 +160,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Enforce suspended/deleted roles in token + `/me` paths; admin delete purges refresh tokens/passwords/links
 - [x] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); `did_web` config not read: the platform DID is derived from `issuer` (see api/platform_did.go)
 - [x] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
-- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go` — presentation submit now verifies the holder signature, nonce, domain, enclosed credentials and holder==subject against a stored single-use request; SD-JWT KB/exp/kid checks still open
+- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go` — presentation submit now verifies the holder signature, nonce, domain, enclosed credentials and holder==subject against a stored single-use request; SD-JWT KB/exp/kid checks still open — the issuer JWT kid now selects the verification key; the other sub-items are still open
 - [x] `http.MaxBytesReader` on all JSON bodies; server timeouts (`ReadHeaderTimeout` etc.) + graceful shutdown
 - [x] TOTP: require old factor to re-enrol/unenrol; replay protection; pending state before first verify
 - [x] Consent: grant ID/subject from server not body; call `validateGrant`; unknown scope must not bypass extra-sensitive; revoke/delete check subject; `CanAccess` still has no callers (the policy engine is not yet wired into credential access)
@@ -173,12 +173,13 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge
 - [ ] DIDComm: anoncrypt returns spoofable sender; add replay/`exp` handling; ECDH-1PU tag in KDF; handle received messages
 - [ ] WebAuthn login finish must issue a session; check `CloneWarning`; anchored key visible in DID resolution
-- [ ] Audit log: atomic append (head read + insert), timestamp in hash, surface append errors
-- [ ] Mapper: concurrent first-login creates duplicate identities; `isNotFound` string matching
-- [ ] Admin: role filter applied after pagination; admin actions not audited
+- [ ] Audit log: atomic append (head read + insert), timestamp in hash, surface append errors — atomic append and error logging are done; timestamp in the hash needs a versioned hash format first
+- [ ] Mapper: concurrent first-login creates duplicate identities; `isNotFound` string matching — the concurrent first-login race is fixed in-process (per-account lock); isNotFound matching and cross-replica uniqueness are still open
+- [ ] Admin: role filter applied after pagination; admin actions not audited — the role filter now applies before pagination; admin audit records are still open
 - [ ] URL-encode `state`/`acr_values`/redirect params (`logout.go`, `provider.go:135`, `bridge.go:561`, `stepup.go`); PAR `client_id` binding; CORS `*` reflection — redirect and CORS fixes done; PAR `client_id` binding still open
 - [ ] `vc.Issue`: tie `IssuerDID` to `VerificationMethodID`; `CheckStatus` panics on negative index; schema `additionalProperties` — `CheckStatus` negative-index panic fixed; the other sub-items are open
-- [ ] `recovery.Combine` reject duplicate/zero share indices; `RecordAuthFailure` atomic + decay; `introspect` client auth — `Combine` duplicate/zero index rejection done; the rest is open
+- [x] `recovery.Combine` reject duplicate/zero share indices; `RecordAuthFailure` atomic with decay; `/oauth/introspect` client auth (see the commits adding those tests)
+
 - [ ] SQLite `MaxOpenConns(1)`: audit for nested queries inside open `rows` (deadlock)
 
 ### 13.4 Wiring gaps (documented but not functional)
@@ -189,9 +190,9 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Re-check credential bootstrap (`maybeIssueBootstrapVC`) after issuer-DID fix
 - [ ] `did:ion` Create not implemented (`pkg/did/ion.go:35`)
 - [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate
-- [ ] Config validation (issuer required + https, TTL parsing, unknown keys) — issuer and TTL validation done; unknown-key checks open
-- [ ] Readiness probe should check keys loaded + migrations applied
-- [ ] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery)
+- [ ] Config validation (issuer required + https, TTL parsing, unknown keys) — issuer and TTL validation done; unknown-key checks open — `config validate` is in place; the unknown-key check is still open
+- [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added; the migration check is still open
+- [ ] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter and WebAuthn eviction now stop on shutdown; webhook delivery is still open
 
 ### 13.5 Standards / production readiness
 - [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility
@@ -214,7 +215,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 
 ### 13.7 Adoption & developer experience
 - [ ] `tpt-identity init` wizard — keys + valid `config.yaml` (random api_key / bridge secret) + migrate; `--profile dev|prod`
-- [ ] `tpt-identity doctor` / `config validate` / `version` with actionable errors
+- [ ] `tpt-identity doctor` / `config validate` / `version` with actionable errors — `config validate` and `version` are done; `doctor` is still open
 - [ ] `tpt-identity serve --demo` sandbox mode (seeded issuers, schemas, fake wallet)
 - [x] Remove enabled-by-default placeholder Google bridge from `config.yaml.example`; add missing keys (cors, trusted_proxies, consent, marketplace, webauthn)
 - [ ] Published image on GHCR via goreleaser + GitHub Actions; compose with auto-init entrypoint (no Go needed for keygen)
