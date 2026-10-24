@@ -26,6 +26,23 @@ func (p *Provider) IntrospectHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// RFC 7662 §2.1: the caller must authenticate, so token metadata is not an open oracle.
+	// Only confidential clients may introspect.
+	clientID := requestClientID(r)
+	if clientID == "" {
+		writeErrorStatus(w, http.StatusUnauthorized, "invalid_client", "client authentication required")
+		return
+	}
+	client, err := p.store.GetClient(r.Context(), clientID)
+	if err != nil || client.TokenEndpointAuthMethod == "none" {
+		writeErrorStatus(w, http.StatusUnauthorized, "invalid_client", "confidential client authentication required")
+		return
+	}
+	if err := p.validateClientAuth(r, clientID); err != nil {
+		writeErrorStatus(w, http.StatusUnauthorized, "invalid_client", err.Error())
+		return
+	}
+
 	token := r.FormValue("token")
 	if token == "" {
 		writeError(w, "invalid_request", "token parameter is required")
@@ -67,4 +84,13 @@ func (p *Provider) IntrospectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(resp)
+}
+
+// requestClientID returns the client identifier a request authenticates as: the Basic auth user
+// name when present, otherwise the client_id form value.
+func requestClientID(r *http.Request) string {
+	if user, _, ok := r.BasicAuth(); ok {
+		return user
+	}
+	return r.FormValue("client_id")
 }

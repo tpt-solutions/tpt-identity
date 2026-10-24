@@ -102,5 +102,9 @@ func (p *Provider) resolvePARRequest(r *http.Request, requestURI string) (map[st
 	if err := json.Unmarshal([]byte(par.Params), &params); err != nil {
 		return nil, fmt.Errorf("par: malformed params")
 	}
+	// RFC 9126 §4: the client that pushed the request must be the one that uses it.
+	if supplied := r.URL.Query().Get("client_id"); supplied != "" && supplied != params["client_id"] {
+		return nil, fmt.Errorf("par: client_id does not match the pushed request")
+	}
 	return params, nil
 }
