@@ -82,7 +82,8 @@ func (s *SQLiteStore) migrate() error {
 		scope_id TEXT NOT NULL,
 		granted_at DATETIME NOT NULL,
 		expires_at DATETIME,
-		explicitly_confirmed INTEGER NOT NULL DEFAULT 0
+		explicitly_confirmed INTEGER NOT NULL DEFAULT 0,
+		revoked_at DATETIME
 	);
 	CREATE INDEX IF NOT EXISTS idx_grants_subject ON consent_grants(subject_did);
 
@@ -181,7 +182,9 @@ func (s *SQLiteStore) migrate() error {
 		subject_did TEXT PRIMARY KEY,
 		encrypted_secret TEXT NOT NULL,
 		account_name TEXT,
-		created_at DATETIME NOT NULL
+		created_at DATETIME NOT NULL,
+		verified_at DATETIME,
+		last_step INTEGER NOT NULL DEFAULT 0
 	);
 
 	CREATE TABLE IF NOT EXISTS webhook_subscriptions (
@@ -315,17 +318,29 @@ func (s *SQLiteStore) migrate() error {
 	_, _ = s.db.Exec(`ALTER TABLE recovery_requests ADD COLUMN commitment TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.Exec(`ALTER TABLE refresh_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT ''`)
 	_, _ = s.db.Exec(`ALTER TABLE webhook_subscriptions ADD COLUMN signing_secret TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE totp_credentials ADD COLUMN verified_at DATETIME`)
+	_, _ = s.db.Exec(`ALTER TABLE totp_credentials ADD COLUMN last_step INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.Exec(`ALTER TABLE consent_grants ADD COLUMN revoked_at DATETIME`)
 	return nil
 }
 
 // --- Identities ---
 
+// execer is satisfied by *sql.DB and *sql.Tx, so the same statements can run in or out of a transaction.
+type execer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
 func (s *SQLiteStore) SaveIdentity(ctx context.Context, id *Identity) error {
+	return saveIdentity(ctx, s.db, id)
+}
+
+func saveIdentity(ctx context.Context, ex execer, id *Identity) error {
 	role := id.Role
 	if role == "" {
 		role = "user"
 	}
-	_, err := s.db.ExecContext(ctx, `
+	_, err := ex.ExecContext(ctx, `
 		INSERT INTO identities (did, method, signing_key_path, enc_key_path, role, tenant_id, created_at, updated_at)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(did) DO UPDATE SET
@@ -336,6 +351,23 @@ func (s *SQLiteStore) SaveIdentity(ctx context.Context, id *Identity) error {
 			updated_at=excluded.updated_at`,
 		id.DID, id.Method, id.SigningKeyPath, id.EncKeyPath, role, id.TenantID, id.CreatedAt, id.UpdatedAt)
 	return err
+}
+
+// CreateIdentityWithDocument stores an identity and its DID document in one transaction,
+// so a failure cannot leave one without the other.
+func (s *SQLiteStore) CreateIdentityWithDocument(ctx context.Context, id *Identity, doc *did.Document) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if err := saveIdentity(ctx, tx, id); err != nil {
+		return err
+	}
+	if err := saveDocument(ctx, tx, doc); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (s *SQLiteStore) GetIdentity(ctx context.Context, did string) (*Identity, error) {
@@ -377,11 +409,15 @@ func (s *SQLiteStore) UpdateIdentity(ctx context.Context, id *Identity) error {
 // --- DID Documents ---
 
 func (s *SQLiteStore) SaveDocument(ctx context.Context, doc *did.Document) error {
+	return saveDocument(ctx, s.db, doc)
+}
+
+func saveDocument(ctx context.Context, ex execer, doc *did.Document) error {
 	b, err := json.Marshal(doc)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO did_documents (did, document, cached_at) VALUES (?,?,?) ON CONFLICT(did) DO UPDATE SET document=excluded.document, cached_at=excluded.cached_at`,
+	_, err = ex.ExecContext(ctx, `INSERT INTO did_documents (did, document, cached_at) VALUES (?,?,?) ON CONFLICT(did) DO UPDATE SET document=excluded.document, cached_at=excluded.cached_at`,
 		doc.ID, string(b), time.Now())
 	return err
 }
@@ -449,18 +485,22 @@ func (s *SQLiteStore) SaveGrant(ctx context.Context, g *consent.Grant) error {
 }
 
 func (s *SQLiteStore) GetGrant(ctx context.Context, id string) (*consent.Grant, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed FROM consent_grants WHERE id=?`, id)
+	row := s.db.QueryRowContext(ctx, `SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed, revoked_at FROM consent_grants WHERE id=?`, id)
 	var g consent.Grant
 	var confirmed int
-	if err := row.Scan(&g.ID, &g.SubjectDID, &g.RelyingDID, &g.Level, &g.ScopeID, &g.GrantedAt, &g.ExpiresAt, &confirmed); err != nil {
+	var revokedAt sql.NullTime
+	if err := row.Scan(&g.ID, &g.SubjectDID, &g.RelyingDID, &g.Level, &g.ScopeID, &g.GrantedAt, &g.ExpiresAt, &confirmed, &revokedAt); err != nil {
 		return nil, fmt.Errorf("get grant: %w", err)
 	}
 	g.ExplicitlyConfirmed = confirmed == 1
+	if revokedAt.Valid {
+		g.RevokedAt = &revokedAt.Time
+	}
 	return &g, nil
 }
 
 func (s *SQLiteStore) ListGrants(ctx context.Context, subjectDID string) ([]*consent.Grant, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed FROM consent_grants WHERE subject_did=? ORDER BY granted_at DESC`, subjectDID)
+	rows, err := s.db.QueryContext(ctx, `SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed, revoked_at FROM consent_grants WHERE subject_did=? ORDER BY granted_at DESC`, subjectDID)
 	if err != nil {
 		return nil, err
 	}
@@ -469,18 +509,26 @@ func (s *SQLiteStore) ListGrants(ctx context.Context, subjectDID string) ([]*con
 	for rows.Next() {
 		var g consent.Grant
 		var confirmed int
-		if err := rows.Scan(&g.ID, &g.SubjectDID, &g.RelyingDID, &g.Level, &g.ScopeID, &g.GrantedAt, &g.ExpiresAt, &confirmed); err != nil {
+		var revokedAt sql.NullTime
+		if err := rows.Scan(&g.ID, &g.SubjectDID, &g.RelyingDID, &g.Level, &g.ScopeID, &g.GrantedAt, &g.ExpiresAt, &confirmed, &revokedAt); err != nil {
 			return nil, err
 		}
 		g.ExplicitlyConfirmed = confirmed == 1
+		if revokedAt.Valid {
+			g.RevokedAt = &revokedAt.Time
+		}
 		out = append(out, &g)
 	}
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteGrant(ctx context.Context, id string) error {
-	_, err := s.db.ExecContext(ctx, `DELETE FROM consent_grants WHERE id=?`, id)
-	return err
+func (s *SQLiteStore) RevokeGrant(ctx context.Context, id string, at time.Time) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `UPDATE consent_grants SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, at.UTC(), id)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 // --- Consent Receipts ---
@@ -911,22 +959,45 @@ func (s *SQLiteStore) scanWebAuthnRow(rows *sql.Rows) (*WebAuthnCredential, erro
 
 // --- TOTP Credentials ---
 
+// SaveTOTPCredential stores a new (pending) factor. A new secret always starts unverified
+// and with no replay history.
 func (s *SQLiteStore) SaveTOTPCredential(ctx context.Context, c *TOTPCredential) error {
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO totp_credentials (subject_did, encrypted_secret, account_name, created_at)
-		VALUES (?,?,?,?)
-		ON CONFLICT(subject_did) DO UPDATE SET encrypted_secret=excluded.encrypted_secret, account_name=excluded.account_name`,
+		INSERT INTO totp_credentials (subject_did, encrypted_secret, account_name, created_at, verified_at, last_step)
+		VALUES (?,?,?,?,NULL,0)
+		ON CONFLICT(subject_did) DO UPDATE SET encrypted_secret=excluded.encrypted_secret,
+			account_name=excluded.account_name, created_at=excluded.created_at, verified_at=NULL, last_step=0`,
 		c.SubjectDID, c.EncryptedSecret, c.AccountName, c.CreatedAt)
 	return err
 }
 
 func (s *SQLiteStore) GetTOTPCredential(ctx context.Context, subjectDID string) (*TOTPCredential, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT subject_did, encrypted_secret, account_name, created_at FROM totp_credentials WHERE subject_did=?`, subjectDID)
+	row := s.db.QueryRowContext(ctx, `SELECT subject_did, encrypted_secret, account_name, created_at, verified_at, last_step FROM totp_credentials WHERE subject_did=?`, subjectDID)
 	var c TOTPCredential
-	if err := row.Scan(&c.SubjectDID, &c.EncryptedSecret, &c.AccountName, &c.CreatedAt); err != nil {
+	var verifiedAt sql.NullTime
+	if err := row.Scan(&c.SubjectDID, &c.EncryptedSecret, &c.AccountName, &c.CreatedAt, &verifiedAt, &c.LastStep); err != nil {
 		return nil, fmt.Errorf("get totp credential: %w", err)
 	}
+	if verifiedAt.Valid {
+		c.VerifiedAt = &verifiedAt.Time
+	}
 	return &c, nil
+}
+
+// ConsumeTOTPStep records that time step was used. It succeeds only for a step newer than
+// the last one used, which stops a code from being replayed inside its validity window. The
+// first success also marks the factor verified.
+func (s *SQLiteStore) ConsumeTOTPStep(ctx context.Context, subjectDID string, step int64) (bool, error) {
+	res, err := s.db.ExecContext(ctx, `
+		UPDATE totp_credentials
+		SET last_step=?, verified_at=COALESCE(verified_at, ?)
+		WHERE subject_did=? AND last_step < ?`,
+		step, time.Now().UTC(), subjectDID, step)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n == 1, err
 }
 
 func (s *SQLiteStore) DeleteTOTPCredential(ctx context.Context, subjectDID string) error {

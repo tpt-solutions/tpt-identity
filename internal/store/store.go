@@ -20,6 +20,8 @@ type Store interface {
 
 	// --- DID Documents ---
 	SaveDocument(ctx context.Context, doc *did.Document) error
+	// CreateIdentityWithDocument saves an identity and its DID document atomically.
+	CreateIdentityWithDocument(ctx context.Context, id *Identity, doc *did.Document) error
 	GetDocument(ctx context.Context, did string) (*did.Document, error)
 
 	// --- Verifiable Credentials ---
@@ -32,7 +34,9 @@ type Store interface {
 	SaveGrant(ctx context.Context, g *consent.Grant) error
 	GetGrant(ctx context.Context, id string) (*consent.Grant, error)
 	ListGrants(ctx context.Context, subjectDID string) ([]*consent.Grant, error)
-	DeleteGrant(ctx context.Context, id string) error
+	// RevokeGrant soft-deletes a grant: it sets revoked_at and keeps the row for the audit trail.
+	// It returns false if the grant does not exist or is already revoked.
+	RevokeGrant(ctx context.Context, id string, at time.Time) (bool, error)
 
 	// --- Consent Receipts ---
 	SaveReceipt(ctx context.Context, r *consent.Receipt) error
@@ -87,6 +91,8 @@ type Store interface {
 	SaveTOTPCredential(ctx context.Context, c *TOTPCredential) error
 	GetTOTPCredential(ctx context.Context, subjectDID string) (*TOTPCredential, error)
 	DeleteTOTPCredential(ctx context.Context, subjectDID string) error
+	// ConsumeTOTPStep atomically records a used time step; it returns false if the step is not newer.
+	ConsumeTOTPStep(ctx context.Context, subjectDID string, step int64) (bool, error)
 
 	// --- Webhook Subscriptions ---
 	SaveWebhookSubscription(ctx context.Context, s *WebhookSubscription) error
@@ -268,6 +274,10 @@ type TOTPCredential struct {
 	EncryptedSecret string    `json:"encryptedSecret"` // hex(salt) + ":" + hex(nonce) + ":" + hex(ciphertext)
 	AccountName     string    `json:"accountName"`
 	CreatedAt       time.Time `json:"createdAt"`
+	// VerifiedAt is nil until the first code is checked; a pending factor does not count as enrolled.
+	VerifiedAt *time.Time `json:"verifiedAt,omitempty"`
+	// LastStep is the last accepted 30-second time step (replay protection).
+	LastStep int64 `json:"-"`
 }
 
 // WebhookSubscription registers a URL to receive platform events.
