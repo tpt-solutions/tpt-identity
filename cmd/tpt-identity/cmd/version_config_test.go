@@ -79,3 +79,22 @@ oidc:
 		t.Error("bad oidc.code_ttl was not reported")
 	}
 }
+
+// A misspelt key is reported as a warning, because the server would silently ignore it. A retired
+// did_web block is reported too.
+func TestValidateConfigReportsUnknownKeys(t *testing.T) {
+	path := writeConfig(t, `
+api_key: "0123456789abcdef0123456789abcdef"
+issuer: "https://identity.example.com"
+api_keyy: "typo"
+did_web:
+  enabled: true
+`)
+	problems := validateConfig(path)
+	if !hasProblem(problems, "warning", `unknown key "api_keyy"`) {
+		t.Errorf("misspelt key not reported: %+v", problems)
+	}
+	if !hasProblem(problems, "warning", "did_web is no longer read") {
+		t.Errorf("retired did_web block not reported: %+v", problems)
+	}
+}

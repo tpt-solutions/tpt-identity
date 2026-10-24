@@ -19,8 +19,9 @@ func versionCmd() *cobra.Command {
 		Use:   "version",
 		Short: "Print the tpt-identity version",
 		Args:  cobra.NoArgs,
-		Run: func(cmd *cobra.Command, _ []string) {
-			fmt.Fprintf(cmd.OutOrStdout(), "tpt-identity %s\n", Version)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			_, err := fmt.Fprintf(cmd.OutOrStdout(), "tpt-identity %s\n", Version)
+			return err
 		},
 	}
 }
@@ -43,13 +44,17 @@ and missing key files. Warnings do not fail the check. The command exits non-zer
 			out := cmd.OutOrStdout()
 			var errs []string
 			for _, p := range problems {
-				fmt.Fprintf(out, "%-7s %s\n", p.level, p.msg)
+				if _, err := fmt.Fprintf(out, "%-7s %s\n", p.level, p.msg); err != nil {
+					return err
+				}
 				if p.level == "error" {
 					errs = append(errs, p.msg)
 				}
 			}
 			if len(problems) == 0 {
-				fmt.Fprintln(out, "ok: configuration is valid")
+				if _, err := fmt.Fprintln(out, "ok: configuration is valid"); err != nil {
+					return err
+				}
 			}
 			if len(errs) > 0 {
 				return fmt.Errorf("%d configuration error(s)", len(errs))
@@ -79,6 +84,16 @@ func validateConfig(path string) []configProblem {
 	var out []configProblem
 	add := func(level, format string, args ...any) {
 		out = append(out, configProblem{level, fmt.Sprintf(format, args...)})
+	}
+
+	for _, k := range v.AllKeys() {
+		switch {
+		case knownConfigKeys[k]:
+		case k == "did_web" || strings.HasPrefix(k, "did_web."):
+			add("warning", "did_web is no longer read; the platform DID is derived from issuer")
+		default:
+			add("warning", "unknown key %q is ignored (typo?)", k)
+		}
 	}
 
 	if v.GetString("api_key") == "" {
@@ -141,4 +156,40 @@ func validateConfig(path string) []configProblem {
 		add("warning", "bridge_secret is not set; in-flight bridge logins will not survive a restart")
 	}
 	return out
+}
+
+// knownConfigKeys lists every leaf key the server reads. Anything else in the file is ignored at
+// runtime, so config validate reports it.
+var knownConfigKeys = map[string]bool{
+	"api_key":                     true,
+	"admin_api_key":               true,
+	"scoped_api_keys":             true,
+	"bridge_secret":               true,
+	"issuer":                      true,
+	"listen_addr":                 true,
+	"db_path":                     true,
+	"rate_limit":                  true,
+	"totp_passphrase":             true,
+	"identity.signing_key":        true,
+	"identity.enc_key":            true,
+	"identity.passphrase":         true,
+	"identity.key_id":             true,
+	"identity.enc_key_id":         true,
+	"oidc.code_ttl":               true,
+	"oidc.id_token_ttl":           true,
+	"oidc.access_token_ttl":       true,
+	"oidc.refresh_token_ttl":      true,
+	"bridges.oidc":                true,
+	"bridges.saml":                true,
+	"bridges.ldap":                true,
+	"bridges.password.enabled":    true,
+	"webauthn.rp_id":              true,
+	"webauthn.rp_display_name":    true,
+	"webauthn.rp_origins":         true,
+	"cors.allowed_origins":        true,
+	"server.trusted_proxies":      true,
+	"consent.expiry_warning_days": true,
+	"marketplace.advertise":       true,
+	"log.level":                   true,
+	"log.format":                  true,
 }
