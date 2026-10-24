@@ -210,7 +210,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] Tests for `internal/authn`, `internal/bridge` (+providers), `internal/events`, `internal/store`, `internal/auditlog`, `internal/resolver`
 - [ ] Tests for `pkg/recovery`, `pkg/keystore`, `pkg/pe`, `pkg/marketplace`, `cmd/`
 - [ ] Regression test per security fix (forged `X-Subject-DID` → 401; empty `api_key` → startup fails; magic-link response has no token)
-- [ ] `go test -race ./...` in CI
+- [x] `go test -race ./...` in CI
 
 ### 13.7 Adoption & developer experience
 - [ ] `tpt-identity init` wizard — keys + valid `config.yaml` (random api_key / bridge secret) + migrate; `--profile dev|prod`
