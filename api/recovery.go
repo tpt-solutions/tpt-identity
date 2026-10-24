@@ -2,14 +2,71 @@ package api
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
 	"net/http"
+	"slices"
+	"sync"
 	"time"
 
 	"github.com/PhillipC05/tpt-identity/internal/store"
 	"github.com/PhillipC05/tpt-identity/pkg/recovery"
 )
+
+// recoveryRequestTTL bounds how long a recovery request can collect approvals.
+const recoveryRequestTTL = 24 * time.Hour
+
+// recoveryCollector holds raw shares submitted for in-flight recovery requests.
+// Raw shares are kept in process memory only and never written to the store, so a
+// restart discards partial progress (the request must then be re-initiated).
+type recoveryCollector struct {
+	mu     sync.Mutex
+	shares map[string]map[string]recovery.Share // requestID -> guardianDID -> share
+}
+
+func newRecoveryCollector() *recoveryCollector {
+	return &recoveryCollector{shares: map[string]map[string]recovery.Share{}}
+}
+
+// add records guardian's share. It returns duplicate=true if the guardian already
+// approved this request. When the count reaches threshold, it returns the collected
+// shares and clears them from memory.
+func (c *recoveryCollector) add(requestID, guardianDID string, share recovery.Share, threshold int) (ready []recovery.Share, count int, duplicate bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	req := c.shares[requestID]
+	if req == nil {
+		req = map[string]recovery.Share{}
+		c.shares[requestID] = req
+	}
+	if _, ok := req[guardianDID]; ok {
+		return nil, len(req), true
+	}
+	req[guardianDID] = share
+	if len(req) < threshold {
+		return nil, len(req), false
+	}
+	for _, sh := range req {
+		ready = append(ready, sh)
+	}
+	delete(c.shares, requestID)
+	return ready, len(ready), false
+}
+
+// discard drops any collected shares for requestID.
+func (c *recoveryCollector) discard(requestID string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.shares, requestID)
+}
+
+// hashShare is the per-guardian commitment stored at initiation: hex(sha256(share.Hex())).
+func hashShare(encoded string) string {
+	h := sha256.Sum256([]byte(encoded))
+	return hex.EncodeToString(h[:])
+}
 
 // handleRecoveryEnrol sets up M-of-N guardian recovery for the authenticated subject.
 // POST /api/v1/me/recovery/enrol
@@ -24,7 +81,7 @@ func (s *Server) handleRecoveryEnrol(w http.ResponseWriter, r *http.Request) {
 		GuardianDIDs []string `json:"guardian_dids"`
 		Threshold    int      `json:"threshold"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -45,14 +102,14 @@ func (s *Server) handleRecoveryEnrol(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.events.Publish(r.Context(), "recovery.enrolled", map[string]any{
-		"subject_did":   subjectDID,
-		"threshold":     req.Threshold,
+		"subject_did":    subjectDID,
+		"threshold":      req.Threshold,
 		"guardian_count": len(req.GuardianDIDs),
 	})
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{
-		"message":       "Recovery enrolled",
-		"threshold":     req.Threshold,
+		"message":        "Recovery enrolled",
+		"threshold":      req.Threshold,
 		"guardian_count": len(req.GuardianDIDs),
 	})
 }
@@ -74,15 +131,16 @@ func (s *Server) handleGetRecoveryConfig(w http.ResponseWriter, r *http.Request)
 	json.NewEncoder(w).Encode(cfg)
 }
 
-// handleRecoveryInitiate starts a recovery process for a subject.
-// The subject's recovery token is split into Shamir shares and each guardian
-// receives theirs via the events bus.
+// handleRecoveryInitiate starts a recovery for a subject. The recovery token is
+// split into Shamir shares, one per guardian. The shares are returned once, in this
+// response, for out-of-band delivery to each guardian. They are never published on
+// the event bus or stored in plaintext. Only the operator (API key) may call this.
 // POST /api/v1/recovery/initiate
 func (s *Server) handleRecoveryInitiate(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SubjectDID string `json:"subject_did"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.SubjectDID == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil || req.SubjectDID == "" {
 		http.Error(w, "subject_did required", http.StatusBadRequest)
 		return
 	}
@@ -93,7 +151,6 @@ func (s *Server) handleRecoveryInitiate(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Generate a recovery token and split into shares.
 	token, err := recovery.NewRecoveryToken()
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -101,41 +158,59 @@ func (s *Server) handleRecoveryInitiate(w http.ResponseWriter, r *http.Request) 
 	}
 	shares, err := recovery.Split(token, cfg.Threshold, len(cfg.GuardianDIDs))
 	if err != nil {
-		http.Error(w, "internal error: "+err.Error(), http.StatusInternalServerError)
-		return
-	}
-
-	// Create recovery request.
-	reqID, _ := randomRecoveryID()
-	recovReq := &store.RecoveryRequest{
-		ID:          reqID,
-		SubjectDID:  req.SubjectDID,
-		StartedAt:   time.Now(),
-		Completed:   false,
-	}
-	if err := s.store.SaveRecoveryRequest(r.Context(), recovReq); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	// Deliver shares to guardians via events bus (out-of-band).
-	for i, guardianDID := range cfg.GuardianDIDs {
-		s.events.Publish(r.Context(), "recovery.initiated", map[string]any{
-			"request_id":   reqID,
-			"subject_did":  req.SubjectDID,
-			"guardian_did": guardianDID,
-			"share":        shares[i].Hex(),
-		})
+	reqID, err := randomRecoveryID()
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	tokenHash := sha256.Sum256(token)
+	if err := s.store.SaveRecoveryRequest(r.Context(), &store.RecoveryRequest{
+		ID:         reqID,
+		SubjectDID: req.SubjectDID,
+		StartedAt:  time.Now(),
+		Commitment: hex.EncodeToString(tokenHash[:]),
+	}); err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
 	}
 
+	out := make(map[string]string, len(cfg.GuardianDIDs))
+	for i, guardianDID := range cfg.GuardianDIDs {
+		encoded := shares[i].Hex()
+		if err := s.store.SaveRecoveryShare(r.Context(), &store.RecoveryShare{
+			RequestID:   reqID,
+			GuardianDID: guardianDID,
+			ShareHash:   hashShare(encoded),
+		}); err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		out[guardianDID] = encoded
+	}
+
+	s.events.Publish(r.Context(), "recovery.initiated", map[string]any{
+		"request_id":  reqID,
+		"subject_did": req.SubjectDID,
+	})
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{
+	w.WriteHeader(http.StatusCreated)
+	json.NewEncoder(w).Encode(map[string]any{
 		"request_id": reqID,
-		"message":    "Recovery initiated — guardians have been notified",
+		"threshold":  cfg.Threshold,
+		"shares":     out,
+		"message":    "Deliver each share only to its guardian. Shares are shown once and are not stored in plaintext.",
 	})
 }
 
-// handleRecoveryApprove records a guardian's share approval for a recovery request.
+// handleRecoveryApprove records a guardian's share for a recovery request. The
+// share must belong to the calling guardian and match the commitment stored at
+// initiation. Once the threshold is reached, the shares are recombined and checked
+// against the commitment before the request is marked completed.
 // POST /api/v1/recovery/{id}/approve
 func (s *Server) handleRecoveryApprove(w http.ResponseWriter, r *http.Request) {
 	guardianDID, err := s.oidc.SubjectFromBearer(r.Header.Get("Authorization"))
@@ -146,10 +221,15 @@ func (s *Server) handleRecoveryApprove(w http.ResponseWriter, r *http.Request) {
 
 	requestID := r.PathValue("id")
 	var req struct {
-		Share string `json:"share"` // hex-encoded share (from recovery.initiated event)
+		Share string `json:"share"` // hex-encoded share, as delivered to the guardian
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Share == "" {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil || req.Share == "" {
 		http.Error(w, "share required", http.StatusBadRequest)
+		return
+	}
+	share, err := recovery.ParseHex(req.Share)
+	if err != nil {
+		http.Error(w, "malformed share", http.StatusBadRequest)
 		return
 	}
 
@@ -162,45 +242,86 @@ func (s *Server) handleRecoveryApprove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "recovery already completed", http.StatusConflict)
 		return
 	}
-
-	// Hash the share for storage (raw share is sensitive).
-	shareBytes := []byte(req.Share)
-	h := make([]byte, 32)
-	copy(h, shareBytes) // simplified — production would use SHA-256
-	shareHash := hex.EncodeToString(h[:16])
-
-	if err := s.store.SaveRecoveryShare(r.Context(), &store.RecoveryShare{
-		RequestID:   requestID,
-		GuardianDID: guardianDID,
-		ShareHash:   shareHash,
-		CollectedAt: time.Now(),
-	}); err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
+	if time.Since(recovReq.StartedAt) > recoveryRequestTTL {
+		s.recoveries.discard(requestID)
+		http.Error(w, "recovery request expired", http.StatusGone)
 		return
 	}
 
-	recovReq.SharesCollected++
+	cfg, err := s.store.GetRecoveryConfig(r.Context(), recovReq.SubjectDID)
+	if err != nil || !slices.Contains(cfg.GuardianDIDs, guardianDID) {
+		http.Error(w, "not a guardian for this subject", http.StatusForbidden)
+		return
+	}
+
+	rows, err := s.store.ListRecoveryShares(r.Context(), requestID)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	var expected string
+	for _, row := range rows {
+		if row.GuardianDID == guardianDID {
+			expected = row.ShareHash
+		}
+	}
+	if expected == "" || subtle.ConstantTimeCompare([]byte(hashShare(share.Hex())), []byte(expected)) != 1 {
+		http.Error(w, "share does not match this guardian's commitment", http.StatusForbidden)
+		return
+	}
+
+	ready, count, duplicate := s.recoveries.add(requestID, guardianDID, share, cfg.Threshold)
+	if duplicate {
+		http.Error(w, "share already submitted", http.StatusConflict)
+		return
+	}
+	recovReq.SharesCollected = count
 	_ = s.store.UpdateRecoveryRequest(r.Context(), recovReq)
 
 	s.events.Publish(r.Context(), "recovery.approved", map[string]any{
-		"request_id":   requestID,
-		"guardian_did": guardianDID,
-		"shares_collected": recovReq.SharesCollected,
+		"request_id":       requestID,
+		"guardian_did":     guardianDID,
+		"shares_collected": count,
 	})
 
 	w.Header().Set("Content-Type", "application/json")
+	if ready == nil {
+		json.NewEncoder(w).Encode(map[string]any{
+			"request_id":       requestID,
+			"status":           "pending",
+			"shares_collected": count,
+			"threshold":        cfg.Threshold,
+		})
+		return
+	}
+
+	token, err := recovery.Combine(ready)
+	tokenHash := sha256.Sum256(token)
+	if err != nil || subtle.ConstantTimeCompare([]byte(hex.EncodeToString(tokenHash[:])), []byte(recovReq.Commitment)) != 1 {
+		// Bad shares: reset the request so it cannot be finished with these shares.
+		recovReq.SharesCollected = 0
+		_ = s.store.UpdateRecoveryRequest(r.Context(), recovReq)
+		s.events.Publish(r.Context(), "recovery.failed", map[string]any{"request_id": requestID})
+		http.Error(w, "recovered secret does not match commitment", http.StatusUnprocessableEntity)
+		return
+	}
+
+	recovReq.Completed = true
+	_ = s.store.UpdateRecoveryRequest(r.Context(), recovReq)
+	s.events.Publish(r.Context(), "recovery.completed", map[string]any{
+		"request_id":  requestID,
+		"subject_did": recovReq.SubjectDID,
+	})
 	json.NewEncoder(w).Encode(map[string]any{
-		"request_id":       requestID,
-		"shares_collected": recovReq.SharesCollected,
-		"message":          "Share accepted",
+		"request_id": requestID,
+		"status":     "completed",
 	})
 }
 
-// handleGetRecovery returns the status of a recovery request.
+// handleGetRecovery returns the status of a recovery request. Operator-only.
 // GET /api/v1/recovery/{id}
 func (s *Server) handleGetRecovery(w http.ResponseWriter, r *http.Request) {
-	requestID := r.PathValue("id")
-	recovReq, err := s.store.GetRecoveryRequest(r.Context(), requestID)
+	recovReq, err := s.store.GetRecoveryRequest(r.Context(), r.PathValue("id"))
 	if err != nil {
 		http.Error(w, "not found", http.StatusNotFound)
 		return

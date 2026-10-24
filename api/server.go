@@ -2,6 +2,9 @@ package api
 
 import (
 	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"log/slog"
 	"net"
@@ -32,6 +35,10 @@ type Server struct {
 	issuer         string
 	totpPassphrase string
 	logger         *slog.Logger
+	magicLinks     MagicLinkSender
+	passwordResets PasswordResetSender
+	recoveries     *recoveryCollector
+	bridgeKey      []byte // HMAC key for bridge state tokens (independent of api_key)
 	limiter        *ipRateLimiter
 	// Platform signing key — used for issuing VCs and SD-JWT credentials.
 	signingKey   ed25519.PrivateKey
@@ -62,7 +69,11 @@ type Server struct {
 // Config holds Server configuration.
 type Config struct {
 	APIKey         string
-	Issuer         string
+	// BridgeSecret keys the HMAC on bridge state tokens. Set it (at least 32 bytes) when
+	// running more than one replica or when flows must survive a restart. If empty, a
+	// random key is generated at startup and in-flight bridge logins fail after a restart.
+	BridgeSecret string
+	Issuer       string
 	TotpPassphrase string
 	// SigningKey is the platform Ed25519 private key used for VC and SD-JWT issuance.
 	SigningKey   ed25519.PrivateKey
@@ -75,7 +86,16 @@ type Config struct {
 	Resolver     *resolver.Resolver
 	OIDC         *oidc.Provider
 	Bridges      *bridge.Manager
-	Logger       *slog.Logger
+	// MagicLinkSender delivers magic-link URLs out of band (e.g. email). Required for
+	// POST /auth/magiclink/request to succeed; the link is never returned to the caller.
+	MagicLinkSender MagicLinkSender
+	// PasswordResetSender delivers reset tokens. Without it, reset requests are accepted
+	// but no token is issued.
+	PasswordResetSender PasswordResetSender
+	// Events is the shared event bus. Subscribers (audit log, marketplace) must be
+	// attached to this same bus. If nil, the server creates a private one.
+	Events *events.Bus
+	Logger *slog.Logger
 	// RateLimit is the number of requests per second per IP (0 = disabled).
 	RateLimit float64
 	// TrustedProxies is a list of CIDR ranges whose X-Forwarded-For header is trusted.
@@ -100,6 +120,18 @@ func NewServer(cfg Config) *Server {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.Default()
+	}
+	eventBus := cfg.Events
+	if eventBus == nil {
+		eventBus = events.NewBus(cfg.Store, logger)
+	}
+	bridgeKey := []byte(cfg.BridgeSecret)
+	if len(bridgeKey) == 0 {
+		bridgeKey = make([]byte, 32)
+		if _, err := rand.Read(bridgeKey); err != nil {
+			panic("api: crypto/rand unavailable: " + err.Error())
+		}
+		logger.Warn("bridge_secret not set; using a random key, in-flight bridge logins will not survive a restart")
 	}
 	bridges := cfg.Bridges
 	if bridges == nil {
@@ -128,10 +160,14 @@ func NewServer(cfg Config) *Server {
 		encKey:             cfg.EncKey,
 		encKeyID:           cfg.EncKeyID,
 		logger:             logger,
+		magicLinks:         cfg.MagicLinkSender,
+		passwordResets:     cfg.PasswordResetSender,
+		recoveries:         newRecoveryCollector(),
+		bridgeKey:          bridgeKey,
 		limiter:            newIPRateLimiter(rateLimit, int(rateLimit*2)),
 		bridges:            bridges,
 		mapper:             bridge.NewMapper(cfg.Store),
-		events:             events.NewBus(cfg.Store, logger),
+		events:             eventBus,
 		lockout:            authn.NewLockoutManager(cfg.Store),
 		trustedProxies:     trustedNets,
 		corsAllowedOrigins: cfg.CORSAllowedOrigins,
@@ -202,7 +238,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) wrap(h http.HandlerFunc) http.HandlerFunc {
-	return s.securityHeaders(s.cors(h))
+	return s.securityHeaders(s.cors(limitBody(h)))
+}
+
+// limitBody caps every request body, so JSON and form decoding in any handler is bounded.
+func limitBody(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if r.Body != nil {
+			r.Body = http.MaxBytesReader(w, r.Body, maxJSONBody)
+		}
+		h(w, r)
+	}
 }
 
 func (s *Server) routes() {
@@ -218,7 +264,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /authorize", s.wrap(s.rateLimit(s.audit(s.oidc.AuthorizeHandler))))
 	s.mux.HandleFunc("POST /token", s.wrap(s.rateLimit(s.audit(s.oidc.TokenHandler))))
 	s.mux.HandleFunc("GET /userinfo", s.wrap(s.rateLimit(s.audit(s.oidc.UserinfoHandler))))
-	s.mux.HandleFunc("POST /oidc/register", s.wrap(s.rateLimit(s.audit(s.oidc.RegisterClientHandler))))
+	// Client registration creates trusted relying parties, so it requires the operator key.
+	s.mux.HandleFunc("POST /oidc/register", s.wrap(s.rateLimit(s.audit(s.auth(s.oidc.RegisterClientHandler)))))
 	s.mux.HandleFunc("POST /oidc/revoke", s.wrap(s.rateLimit(s.audit(s.oidc.RevokeHandler))))
 	s.mux.HandleFunc("POST /oauth/introspect", s.wrap(s.rateLimit(s.audit(s.oidc.IntrospectHandler))))
 	// RP-initiated logout (OIDC Session Management)
@@ -320,8 +367,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /api/v1/me/recovery/enrol", s.wrap(s.rateLimit(s.audit(s.handleRecoveryEnrol))))
 	s.mux.HandleFunc("GET /api/v1/me/recovery", s.wrap(s.rateLimit(s.audit(s.handleGetRecoveryConfig))))
 	s.mux.HandleFunc("POST /api/v1/recovery/{id}/approve", s.wrap(s.rateLimit(s.audit(s.handleRecoveryApprove))))
-	s.mux.HandleFunc("POST /api/v1/recovery/initiate", s.wrap(s.rateLimit(s.audit(s.handleRecoveryInitiate))))
-	s.mux.HandleFunc("GET /api/v1/recovery/{id}", s.wrap(s.rateLimit(s.audit(s.handleGetRecovery))))
+	s.mux.HandleFunc("POST /api/v1/recovery/initiate", s.wrap(s.rateLimit(s.audit(s.auth(s.handleRecoveryInitiate)))))
+	s.mux.HandleFunc("GET /api/v1/recovery/{id}", s.wrap(s.rateLimit(s.audit(s.auth(s.handleGetRecovery)))))
 
 	// ── Presentation Exchange ──────────────────────────────────────────────
 	s.mux.HandleFunc("POST /api/v1/presentations/request", s.wrap(s.rateLimit(s.audit(s.auth(s.handleCreatePresentationRequest)))))
@@ -387,12 +434,15 @@ func (s *Server) rateLimit(next http.HandlerFunc) http.HandlerFunc {
 // auth middleware checks the Bearer API key.
 func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if s.apiKey != "" {
-			bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-			if bearer != s.apiKey {
-				http.Error(w, "unauthorized", http.StatusUnauthorized)
-				return
-			}
+		// Fail closed: an unconfigured key must never grant access.
+		if s.apiKey == "" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+		if subtle.ConstantTimeCompare([]byte(bearer), []byte(s.apiKey)) != 1 {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
 		}
 		next(w, r)
 	}
@@ -419,6 +469,18 @@ func parsePagination(r *http.Request, defaultLimit, maxLimit int) (limit, offset
 }
 
 // writeJSONError writes a consistent JSON error body understood by all API clients.
+// maxJSONBody caps request bodies decoded with json.NewDecoder.
+const maxJSONBody = 1 << 20 // 1 MiB
+
+// randomHex returns n cryptographically random bytes encoded as hex (2n characters).
+func randomHex(n int) (string, error) {
+	b := make([]byte, n)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b), nil
+}
+
 func writeJSONError(w http.ResponseWriter, status int, code, description string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)

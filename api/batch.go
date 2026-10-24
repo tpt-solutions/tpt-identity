@@ -116,7 +116,7 @@ func (s *Server) handleCredentialFreshness(w http.ResponseWriter, r *http.Reques
 
 	response := map[string]any{
 		"credential_id": id,
-		"subject_did":   cred.CredentialSubject["id"],
+		"subject_did":   cred.CredentialSubject.ID,
 		"schema_id":     cred.Type[len(cred.Type)-1],
 		"fresh":         fresh,
 		"reason":        reason,

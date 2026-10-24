@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -39,8 +40,8 @@ func newTestServer(t *testing.T) *api.Server {
 	return api.NewServer(api.Config{
 		APIKey:       testAPIKey,
 		Issuer:       testIssuer,
-		SigningKey:    priv,
-		SigningKeyID:  testIssuer + "#signing-key-1",
+		SigningKey:   priv,
+		SigningKeyID: testIssuer + "#signing-key-1",
 		Store:        st,
 		Resolver:     res,
 		OIDC:         oidcProvider,
@@ -333,5 +334,91 @@ func TestMySessionsRequiresBearer(t *testing.T) {
 	// Without any token we expect 401.
 	if w.Code != http.StatusUnauthorized {
 		t.Errorf("want 401, got %d", w.Code)
+	}
+}
+
+// ---- /authorize subject binding ----
+
+// A client-supplied X-Subject-DID header must never establish the end-user's identity.
+func TestAuthorizeRejectsForgedSubjectHeader(t *testing.T) {
+	srv := newTestServer(t)
+	q := "/authorize?client_id=c1&redirect_uri=https%3A%2F%2Frp.example%2Fcb&state=s&code_challenge=x&code_challenge_method=S256"
+	w := do(t, srv, http.MethodGet, q, "", map[string]string{"X-Subject-DID": "did:peer:victim"})
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 for forged X-Subject-DID, got %d", w.Code)
+	}
+}
+
+// An empty api_key must fail closed: gated endpoints reject every caller.
+func TestAuthFailsClosedWithEmptyAPIKey(t *testing.T) {
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, priv, _ := crypto.GenerateSigningKey()
+	srv := api.NewServer(api.Config{
+		Issuer:     testIssuer,
+		SigningKey: priv,
+		Store:      st,
+		OIDC:       oidc.NewProvider(testIssuer, priv, "test-key-1", st),
+		Resolver:   resolver.New(time.Minute),
+	})
+	w := do(t, srv, http.MethodGet, "/api/v1/schemas", "", map[string]string{"Authorization": "Bearer "})
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("want 401 with empty api_key, got %d", w.Code)
+	}
+}
+
+// ---- Magic link delivery ----
+
+type recordingSender struct{ url string }
+
+func (r *recordingSender) SendMagicLink(_ context.Context, _, verifyURL string, _ time.Time) error {
+	r.url = verifyURL
+	return nil
+}
+
+func newMagicLinkServer(t *testing.T, sender api.MagicLinkSender) *api.Server {
+	t.Helper()
+	st, err := store.OpenSQLite(":memory:")
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+	_, priv, _ := crypto.GenerateSigningKey()
+	return api.NewServer(api.Config{
+		Issuer:          testIssuer,
+		SigningKey:      priv,
+		Store:           st,
+		OIDC:            oidc.NewProvider(testIssuer, priv, "test-key-1", st),
+		Resolver:        resolver.New(time.Minute),
+		MagicLinkSender: sender,
+	})
+}
+
+// The magic-link response must never carry the verify URL or its token.
+func TestMagicLinkResponseOmitsToken(t *testing.T) {
+	sender := &recordingSender{}
+	srv := newMagicLinkServer(t, sender)
+	w := do(t, srv, http.MethodPost, "/auth/magiclink/request", `{"email":"a@example.com"}`, map[string]string{"Content-Type": "application/json"})
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("want 202, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "token=") || strings.Contains(body, "verify_url") {
+		t.Errorf("response leaks magic link: %s", body)
+	}
+	if !strings.Contains(sender.url, "token=") {
+		t.Errorf("sender did not receive a verify URL")
+	}
+}
+
+// Without a configured sender the endpoint must refuse rather than return a link.
+func TestMagicLinkWithoutSenderUnavailable(t *testing.T) {
+	srv := newMagicLinkServer(t, nil)
+	w := do(t, srv, http.MethodPost, "/auth/magiclink/request", `{"email":"a@example.com"}`, map[string]string{"Content-Type": "application/json"})
+	if w.Code != http.StatusServiceUnavailable {
+		t.Errorf("want 503, got %d", w.Code)
 	}
 }

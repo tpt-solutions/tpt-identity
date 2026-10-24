@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -34,7 +35,23 @@ type bridgeState struct {
 	CodeChallengeMethod string `json:"code_challenge_method,omitempty"`
 	LinkFor             string `json:"link_for,omitempty"`  // non-empty = link to existing DID
 	AuthnRequestID      string `json:"authn_request_id,omitempty"` // SAML: anti-replay
+	Binding             string `json:"binding,omitempty"`          // must match the browser cookie on callback
 	CreatedAt           int64  `json:"created_at"`
+}
+
+// bridgeStateCookie binds a bridge flow to the browser that started it.
+const bridgeStateCookie = "tpt_bridge_binding"
+
+// checkClientRedirect verifies that clientID is registered and redirectURI is one of its URIs.
+func (s *Server) checkClientRedirect(ctx context.Context, clientID, redirectURI string) error {
+	client, err := s.store.GetClient(ctx, clientID)
+	if err != nil {
+		return fmt.Errorf("unknown client_id")
+	}
+	if !slices.Contains(client.RedirectURIs, redirectURI) {
+		return fmt.Errorf("redirect_uri not registered for this client")
+	}
+	return nil
 }
 
 func (s *Server) signBridgeState(st bridgeState) (string, error) {
@@ -43,7 +60,7 @@ func (s *Server) signBridgeState(st bridgeState) (string, error) {
 		return "", err
 	}
 	payload := base64.RawURLEncoding.EncodeToString(b)
-	mac := hmac.New(sha256.New, []byte(s.apiKey))
+	mac := hmac.New(sha256.New, s.bridgeKey)
 	mac.Write([]byte(payload))
 	sig := hex.EncodeToString(mac.Sum(nil))
 	return payload + "." + sig, nil
@@ -54,7 +71,7 @@ func (s *Server) verifyBridgeState(token string) (*bridgeState, error) {
 	if len(parts) != 2 {
 		return nil, fmt.Errorf("invalid state token")
 	}
-	mac := hmac.New(sha256.New, []byte(s.apiKey))
+	mac := hmac.New(sha256.New, s.bridgeKey)
 	mac.Write([]byte(parts[0]))
 	expectedSig := hex.EncodeToString(mac.Sum(nil))
 	if subtle.ConstantTimeCompare([]byte(parts[1]), []byte(expectedSig)) != 1 {
@@ -115,6 +132,27 @@ func (s *Server) startRedirectBridge(w http.ResponseWriter, r *http.Request, rb 
 			st.LinkFor = subjectDID
 		}
 	}
+	if st.ClientID != "" {
+		if err := s.checkClientRedirect(r.Context(), st.ClientID, st.RedirectURI); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	binding, err := randomHex(16)
+	if err != nil {
+		http.Error(w, "internal error", http.StatusInternalServerError)
+		return
+	}
+	st.Binding = binding
+	http.SetCookie(w, &http.Cookie{
+		Name:     bridgeStateCookie,
+		Value:    binding,
+		Path:     "/auth/",
+		MaxAge:   600,
+		HttpOnly: true,
+		Secure:   strings.HasPrefix(s.issuer, "https://"),
+		SameSite: http.SameSiteLaxMode,
+	})
 	stateToken, err := s.signBridgeState(st)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -189,6 +227,13 @@ func (s *Server) handleBridgeCallback(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid state: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The flow must complete in the same browser that started it.
+	cookie, err := r.Cookie(bridgeStateCookie)
+	if err != nil || st.Binding == "" || subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(st.Binding)) != 1 {
+		http.Error(w, "state is not bound to this browser", http.StatusBadRequest)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: bridgeStateCookie, Value: "", Path: "/auth/", MaxAge: -1, HttpOnly: true})
 	ext, err := rb.ExchangeCode(r.Context(), code)
 	if err != nil {
 		http.Error(w, "upstream auth failed: "+err.Error(), http.StatusUnauthorized)
@@ -262,21 +307,23 @@ func (s *Server) handleSAMLACS(w http.ResponseWriter, r *http.Request) {
 
 // ─── Password bridge ────────────────────────────────────────────────────────
 
+type passwordLoginRequest struct {
+	Identifier          string `json:"identifier"`
+	Password            string `json:"password"`
+	ClientID            string `json:"client_id"`
+	RedirectURI         string `json:"redirect_uri"`
+	Scope               string `json:"scope"`
+	Nonce               string `json:"nonce"`
+	State               string `json:"state"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
+}
+
 // handlePasswordAuth authenticates with an identifier and password.
 // POST /auth/password
 func (s *Server) handlePasswordAuth(w http.ResponseWriter, r *http.Request) {
-	var req struct {
-		Identifier          string `json:"identifier"`
-		Password            string `json:"password"`
-		ClientID            string `json:"client_id"`
-		RedirectURI         string `json:"redirect_uri"`
-		Scope               string `json:"scope"`
-		Nonce               string `json:"nonce"`
-		State               string `json:"state"`
-		CodeChallenge       string `json:"code_challenge"`
-		CodeChallengeMethod string `json:"code_challenge_method"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var req passwordLoginRequest
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -296,22 +343,48 @@ func (s *Server) handlePasswordAuth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	lockKey := strings.ToLower(strings.TrimSpace(req.Identifier))
+	if err := s.lockout.CheckLocked(r.Context(), lockKey); err != nil {
+		w.Header().Set("Retry-After", "300")
+		http.Error(w, "account temporarily locked", http.StatusTooManyRequests)
+		return
+	}
+
 	ext, err := pwBridge.VerifyCredentials(r.Context(), req.Identifier, req.Password)
 	if err != nil {
-		s.lockout.RecordFailure(r.Context(), req.Identifier)
+		// The duress passphrase is a secondary credential: when the normal password
+		// fails, check it against the enrolled duress hash. Lookup only — a failed
+		// login must never create an identity.
+		if dExt, ok := s.duressLogin(r, lockKey, req.Password); ok {
+			s.lockout.RecordSuccess(r.Context(), lockKey)
+			s.finishPasswordLogin(w, r, req, dExt)
+			return
+		}
+		_ = s.lockout.RecordFailure(r.Context(), lockKey)
 		http.Error(w, "invalid credentials", http.StatusUnauthorized)
 		return
 	}
-	s.lockout.RecordSuccess(r.Context(), req.Identifier)
+	s.lockout.RecordSuccess(r.Context(), lockKey)
+	s.finishPasswordLogin(w, r, req, ext)
+}
 
-	// Duress check: resolve the platform DID then verify whether the supplied
-	// password also matches the enrolled duress passphrase.
-	if subjectDID, _, findErr := s.mapper.FindOrCreate(r.Context(), ext); findErr == nil {
-		duressManager := authn.NewDuressManager(s.store)
-		if isDuress, _ := duressManager.CheckDuress(r.Context(), subjectDID, req.Password); isDuress {
-			ext.Duress = true
-		}
+// duressLogin reports whether password is the enrolled duress passphrase for the
+// account identified by lockKey. On success it returns the external identity with
+// Duress set, so the session proceeds normally and a silent alert fires.
+func (s *Server) duressLogin(r *http.Request, lockKey, password string) (*bridge.ExternalIdentity, bool) {
+	link, err := s.store.GetExternalLink(r.Context(), "password", lockKey)
+	if err != nil {
+		return nil, false
 	}
+	isDuress, _ := authn.NewDuressManager(s.store).CheckDuress(r.Context(), link.SubjectDID, password)
+	if !isDuress {
+		return nil, false
+	}
+	return &bridge.ExternalIdentity{Provider: "password", ExternalID: lockKey, Duress: true}, true
+}
+
+// finishPasswordLogin completes a password login once the identity is established.
+func (s *Server) finishPasswordLogin(w http.ResponseWriter, r *http.Request, req passwordLoginRequest, ext *bridge.ExternalIdentity) {
 
 	st := bridgeState{
 		ClientID:            req.ClientID,
@@ -336,16 +409,27 @@ type magicLinkRequest struct {
 	Nonce       string `json:"nonce"`
 }
 
-// handleMagicLinkRequest generates and "sends" a magic link token.
+// MagicLinkSender delivers a magic-link URL to the account holder (typically by email).
+// Implementations must not log or echo verifyURL beyond the delivery itself.
+type MagicLinkSender interface {
+	SendMagicLink(ctx context.Context, email, verifyURL string, expiresAt time.Time) error
+}
+
+// handleMagicLinkRequest generates a single-use magic link and hands it to the
+// configured MagicLinkSender. The response never contains the link or token.
 // POST /auth/magiclink/request
 func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) {
 	var req magicLinkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 	if req.Email == "" {
 		http.Error(w, "email required", http.StatusBadRequest)
+		return
+	}
+	if s.magicLinks == nil {
+		http.Error(w, "magic link delivery not configured", http.StatusServiceUnavailable)
 		return
 	}
 
@@ -370,13 +454,16 @@ func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	// TODO: integrate with tpt-email to deliver the magic link. For now return it
-	// in the response (dev mode). In production this endpoint returns 202 with no URL.
+	if err := s.magicLinks.SendMagicLink(r.Context(), req.Email, verifyURL, expiresAt); err != nil {
+		s.logger.Error("magic link delivery failed", "error", err)
+		http.Error(w, "delivery failed", http.StatusServiceUnavailable)
+		return
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	json.NewEncoder(w).Encode(map[string]any{
 		"expires_at": expiresAt.UTC().Format(time.RFC3339),
-		"verify_url": verifyURL, // remove in production
 	})
 }
 
@@ -553,6 +640,15 @@ func (s *Server) finishBridgeAuth(w http.ResponseWriter, r *http.Request, ext *b
 
 	// If OIDC flow params are present, issue an authorization code and redirect.
 	if st.ClientID != "" && st.RedirectURI != "" {
+		// Only registered clients and redirect URIs may receive a code, and PKCE is mandatory.
+		if err := s.checkClientRedirect(r.Context(), st.ClientID, st.RedirectURI); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		if st.CodeChallenge == "" || st.CodeChallengeMethod != "S256" {
+			http.Error(w, "PKCE (S256) is required", http.StatusBadRequest)
+			return
+		}
 		authCode, err := s.oidc.IssueSessionForDIDCtx(r, subjectDID, st.ClientID, st.RedirectURI, st.Scope, st.Nonce, st.CodeChallenge, st.CodeChallengeMethod, amr)
 		if err != nil {
 			http.Error(w, "session error: "+err.Error(), http.StatusInternalServerError)

@@ -51,6 +51,8 @@ func (s *Server) handleAdminSuspendIdentity(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "update identity: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
+	// End live sessions now; the role check in token verification blocks new use.
+	s.revokeSubjectSessions(r.Context(), did)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(id)
 }
@@ -91,13 +93,18 @@ func (s *Server) handleAdminDeleteIdentity(w http.ResponseWriter, r *http.Reques
 			_ = s.store.DeleteCredential(r.Context(), c.ID)
 		}
 	}
-	// Revoke all active sessions.
-	sessions, err := s.store.ListSessionsBySubject(r.Context(), did)
-	if err == nil {
-		for _, sess := range sessions {
-			_ = s.store.DeleteSession(r.Context(), sess.ID)
+	// Revoke all active sessions and refresh-token families.
+	s.revokeSubjectSessions(r.Context(), did)
+	// Remove every login method, so the account cannot be reached through any bridge.
+	if links, err := s.store.ListExternalLinks(r.Context(), did); err == nil {
+		for _, l := range links {
+			_ = s.store.DeleteExternalLink(r.Context(), l.Provider, l.ExternalID)
+			if l.Provider == "password" {
+				_ = s.store.DeletePasswordHash(r.Context(), l.ExternalID)
+			}
 		}
 	}
+	_ = s.store.DeleteDuressConfig(r.Context(), did)
 	// The Identity row itself — overwrite role to mark as deleted so audit history is preserved.
 	id := &store.Identity{
 		DID:       did,
