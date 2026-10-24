@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/tpt-solutions/tpt-identity/internal/netguard"
@@ -51,16 +52,50 @@ type Bus struct {
 	client       *http.Client
 	subscribers  []LocalSubscriber
 	deliveryHook DeliveryHook
+	// inflight counts webhook deliveries that have not finished; ctx stops them on Close.
+	inflight sync.WaitGroup
+	ctx      context.Context
+	cancel   context.CancelFunc
 }
 
 // NewBus creates a new event bus.
 func NewBus(st store.Store, logger *slog.Logger) *Bus {
+	ctx, cancel := context.WithCancel(context.Background())
 	return &Bus{
 		st:     st,
 		logger: logger,
 		// Connects only to public addresses and never follows redirects.
 		client: netguard.Client(10 * time.Second),
+		ctx:    ctx,
+		cancel: cancel,
 	}
+}
+
+// Close waits for in-flight webhook deliveries until ctx is done, then cancels the ones still running.
+// Call it on shutdown, after the HTTP server has stopped accepting requests.
+func (b *Bus) Close(ctx context.Context) error {
+	done := make(chan struct{})
+	go func() {
+		b.inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		b.cancel()
+		return nil
+	case <-ctx.Done():
+		b.cancel()
+		return fmt.Errorf("events: %w while webhook deliveries were in flight", ctx.Err())
+	}
+}
+
+// dispatch runs one delivery in the background, counted so Close can wait for it.
+func (b *Bus) dispatch(sub *store.WebhookSubscription, body []byte) {
+	b.inflight.Add(1)
+	go func() {
+		defer b.inflight.Done()
+		b.deliver(sub, body)
+	}()
 }
 
 // Ping sends a test event to a single subscription. Other subscribers do not receive it.
@@ -75,7 +110,7 @@ func (b *Bus) Ping(sub *store.WebhookSubscription) {
 		b.logger.Error("events: marshal ping", "err", err)
 		return
 	}
-	go b.deliver(sub, body)
+	b.dispatch(sub, body)
 }
 
 // Subscribe registers an in-process subscriber called on every Publish.
@@ -114,7 +149,7 @@ func (b *Bus) Publish(ctx context.Context, eventType string, payload any) {
 	}
 
 	for _, sub := range subs {
-		go b.deliver(sub, body)
+		b.dispatch(sub, body)
 	}
 }
 
@@ -129,10 +164,15 @@ func (b *Bus) deliver(sub *store.WebhookSubscription, body []byte) {
 	backoff := 2 * time.Second
 	for attempt := 0; attempt < 3; attempt++ {
 		if attempt > 0 {
-			time.Sleep(backoff)
+			select {
+			case <-b.ctx.Done():
+				b.logger.Warn("events: delivery abandoned at shutdown", "url", sub.URL)
+				return
+			case <-time.After(backoff):
+			}
 			backoff *= 2
 		}
-		req, err := http.NewRequest(http.MethodPost, sub.URL, bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(b.ctx, http.MethodPost, sub.URL, bytes.NewReader(body))
 		if err != nil {
 			b.logger.Error("events: build request", "url", sub.URL, "err", err)
 			return
