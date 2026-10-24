@@ -170,14 +170,14 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] `/me/export` leaks `Code`, `CodeChallenge`, `AccessToken` of sessions
 - [x] Upstream OIDC RP: verify `iss`/`aud`/`nonce`/`email_verified`; timeouts; Ed25519 key length check; bootstrap VC only for verified email
 - [x] Metrics: label by route pattern, not raw `r.URL.Path` (cardinality)
-- [ ] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge
+- [ ] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge — the dial now uses the checked address (DNS rebinding); the document id, port and cache items are still open
 - [ ] DIDComm: anoncrypt returns spoofable sender; add replay/`exp` handling; ECDH-1PU tag in KDF; handle received messages
-- [ ] WebAuthn login finish must issue a session; check `CloneWarning`; anchored key visible in DID resolution
+- [ ] WebAuthn login finish must issue a session; check `CloneWarning`; anchored key visible in DID resolution — passkey login now returns a session token and refuses cloned authenticators; the anchored key in DID resolution is still open
 - [ ] Audit log: atomic append (head read + insert), timestamp in hash, surface append errors — atomic append and error logging are done; timestamp in the hash needs a versioned hash format first
 - [ ] Mapper: concurrent first-login creates duplicate identities; `isNotFound` string matching — the concurrent first-login race is fixed in-process (per-account lock); isNotFound matching and cross-replica uniqueness are still open
 - [ ] Admin: role filter applied after pagination; admin actions not audited — the role filter now applies before pagination; admin audit records are still open
 - [ ] URL-encode `state`/`acr_values`/redirect params (`logout.go`, `provider.go:135`, `bridge.go:561`, `stepup.go`); PAR `client_id` binding; CORS `*` reflection — redirect and CORS fixes done; PAR `client_id` binding still open
-- [ ] `vc.Issue`: tie `IssuerDID` to `VerificationMethodID`; `CheckStatus` panics on negative index; schema `additionalProperties` — `CheckStatus` negative-index panic fixed; the other sub-items are open
+- [ ] `vc.Issue`: tie `IssuerDID` to `VerificationMethodID`; `CheckStatus` panics on negative index; schema `additionalProperties` — IssuerDID is tied to the verification method and CheckStatus no longer panics; the schema additionalProperties check is still open
 - [x] `recovery.Combine` reject duplicate/zero share indices; `RecordAuthFailure` atomic with decay; `/oauth/introspect` client auth (see the commits adding those tests)
 
 - [ ] SQLite `MaxOpenConns(1)`: audit for nested queries inside open `rows` (deadlock)
@@ -191,7 +191,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] `did:ion` Create not implemented (`pkg/did/ion.go:35`)
 - [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate
 - [ ] Config validation (issuer required + https, TTL parsing, unknown keys) — issuer and TTL validation done; unknown-key checks open — `config validate` is in place; the unknown-key check is still open
-- [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added; the migration check is still open
+- [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added. The migration check is blocked: OpenSQLite creates tables inline and never writes schema_migrations, which only `migrate up` does, so a check would mark a normal start as degraded. Unify the two schema paths first
 - [ ] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter and WebAuthn eviction now stop on shutdown; webhook delivery is still open
 
 ### 13.5 Standards / production readiness
@@ -209,7 +209,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 
 ### 13.6 Test coverage
 - [ ] Tests for `internal/authn`, `internal/bridge` (+providers), `internal/events`, `internal/store`, `internal/auditlog`, `internal/resolver` — lockout, OIDC RP, netguard client IP done; the rest open
-- [ ] Tests for `pkg/recovery`, `pkg/keystore`, `pkg/pe`, `pkg/marketplace`, `cmd/` — `pkg/recovery`, `pkg/keystore`, `pkg/marketplace` done; `pkg/pe` and `cmd/` open
+- [x] Tests for `pkg/recovery`, `pkg/keystore`, `pkg/pe`, `pkg/marketplace` and `cmd/` (config validate, version)
 - [ ] Regression test per security fix (forged `X-Subject-DID` → 401; empty `api_key` → startup fails; magic-link response has no token)
 - [x] `go test -race ./...` in CI
 
