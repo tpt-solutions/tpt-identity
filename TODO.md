@@ -149,7 +149,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 ### 13.2 Security — high
 - [x] Access-token verify: check `iss`, `aud`, `token_type`; reject ID tokens at `/me/*` and `/userinfo`; persist revocation list (DB) and consult it everywhere
 - [x] Token-minting oracles: `stepup.go`, `oid4vp.go:497-504`, `token_exchange.go` (client auth, reject ID token as subject token, fail on bad actor token)
-- [ ] OID4VP response endpoint: validate `state`, verify VP + nonce, bound/evict maps, persist — state validation, one-response-per-request and bounded map done; VP signature/nonce verification and persistence still open — VP holder proof, nonce, client_id and credential subject are now verified before a response is stored; persistence and JWT-format VPs are still open
+- [ ] OID4VP response endpoint: validate `state`, verify VP + nonce, bound/evict maps, persist — persistence is now done (store-backed, one response per request by constraint); JWT-format VPs are still open
 - [x] Dynamic client registration: auth/rate class, redirect URI validation, enforce `grant_types` + scope, SSRF-guard `backchannel_logout_uri`, call `SendBackChannelLogout`, support post-logout URIs
 - [x] Atomic auth-code redemption and refresh rotation; revoke token family on replay
 - [x] Webhooks: connect-time IP-check dialer, no redirects, https only; fix HMAC signing (currently keyed by hash of secret); don't fan out `webhook.ping`
@@ -197,7 +197,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 ### 13.5 Standards / production readiness
 - [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility — the verification side is done (retired keys by kid, in the JWKS). Still open: the rotation CLI, RS256/ES256, and the DID-document side
 - [ ] DID document update / key rotation / deactivation API
-- [ ] Persist OID4VP state and access-token revocation (replica-safe)
+- [x] Persist OID4VP state and access-token revocation (replica-safe) — done: OID4VP requests and responses are in the store, and access-token revocation was already persistent. Replica-safe for both
 - [ ] PostgreSQL store; multi-tenancy via existing `TenantID` fields
 - [ ] Scoped API keys / RBAC; admin credential separate from API key — scoped API keys and a separate admin credential are done; per-user roles (RBAC) are still open
 - [x] Complete OIDC discovery metadata; serve `/.well-known/oauth-authorization-server` (RFC 8414) — discovery now advertises S256, response modes, auth methods and the request-parameter flags; RFC 8414 is served (`api/discovery_test.go`)
