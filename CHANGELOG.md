@@ -6,6 +6,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- Consent for relying parties. Before a code is issued to a client that is not first-party, the user is asked to allow sharing for that client and scope, once. The grant is recorded in the consent store, where the user can revoke it. A client registered with `first_party: true` (operator registration only) skips the step. Denial returns `access_denied` to the relying party.
 - A hosted sign-in page at `/login`, on the issuer origin, served from the binary. A browser with no session that calls `/authorize` is sent there with a validated request. The page offers magic link and passkey (password is not offered). Its transaction is bound to the browser that started it, and every form step checks a CSRF token. Its Content Security Policy forbids inline script and framing.
 - Device approval in a browser: `GET /device/start?user_code=` signs the user in on the login page and approves the device.
 
@@ -43,6 +44,7 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Security
 
 - A magic-link sign-in whose state was expired or forged finished without the relying party's code. It is now refused.
+- did:peer X25519 keys were written with a `z` (base58btc) prefix over base64url text. About 2% of keys decoded to other bytes, so messages to those peers failed to decrypt. The encoder now writes `u`, and the DIDComm decoder accepts a key only when it carries the x25519-pub codec, so documents already stored under the old prefix still work.
 
 - A caller could supply `iss`, `sub`, `exp` or other issuer-owned claims as always-visible SD-JWT claims, and the platform signed them. Those claims are now refused.
 - A PAR `request_uri` could be burned by a client other than the one that pushed it. The check now runs before the request is consumed.
