@@ -32,6 +32,11 @@ func serveCmd() *cobra.Command {
 		Use:   "serve",
 		Short: "Start the tpt-identity server",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if demoMode {
+				if err := prepareDemo(cmd, demoDir); err != nil {
+					return err
+				}
+			}
 			viper.SetConfigFile(cfgFile)
 			viper.SetEnvPrefix("TPT_IDENTITY")
 			viper.AutomaticEnv()
@@ -261,7 +266,24 @@ func serveCmd() *cobra.Command {
 				srvCfg.RecoveryNoticeSender = mailer
 				logger.Info("email delivery enabled", "smtp_host", host)
 			}
+			if demoMode {
+				// Demo mode prints the links it would send. An SMTP relay, if configured, takes precedence.
+				if srvCfg.MagicLinkSender == nil {
+					srvCfg.MagicLinkSender = &demoMailer{out: os.Stdout}
+				}
+				if srvCfg.RecoveryNoticeSender == nil {
+					srvCfg.RecoveryNoticeSender = &demoMailer{out: os.Stdout}
+				}
+			}
 			srv := api.NewServer(srvCfg)
+			if demoMode {
+				if err := registerDemoClient(context.Background(), db, issuer); err != nil {
+					return fmt.Errorf("register the demo client: %w", err)
+				}
+				rp := newDemoRelyingParty(issuer, ks.SigningPub, keyID)
+				srv.Mount("/demo", rp.Handler())
+				srv.Mount("/demo/", rp.Handler())
+			}
 
 			// ── Consent expiry warning goroutine ──────────────────────────
 			warningDays := viper.GetInt("consent.expiry_warning_days")
@@ -312,6 +334,9 @@ func serveCmd() *cobra.Command {
 				IdleTimeout:       120 * time.Second,
 				MaxHeaderBytes:    1 << 20,
 			}
+			if demoMode {
+				printDemoBanner(os.Stdout, demoDir, issuer)
+			}
 			logger.Info("tpt-identity server starting", "addr", addr, "issuer", issuer)
 
 			errCh := make(chan error, 1)
@@ -335,5 +360,7 @@ func serveCmd() *cobra.Command {
 			return shutdownErr
 		},
 	}
+	c.Flags().BoolVar(&demoMode, "demo", false, "run the demo: a local, throwaway server on 127.0.0.1:8080 with printed sign-in emails and a built-in relying party")
+	c.Flags().StringVar(&demoDir, "demo-dir", "tpt-demo", "directory for the demo configuration, keys and database")
 	return c
 }
