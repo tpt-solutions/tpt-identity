@@ -3,7 +3,6 @@
 -- new databases. These files are the source-of-truth for version tracking and
 -- incremental upgrades on existing databases.
 
-PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS schema_migrations (
     version     INTEGER PRIMARY KEY,

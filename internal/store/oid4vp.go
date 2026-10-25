@@ -10,24 +10,6 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
-// migrateOID4VP creates the OID4VP state tables. Called from migrate().
-func (s *SQLStore) migrateOID4VP() error {
-	_, err := s.db.Exec(`
-	CREATE TABLE IF NOT EXISTS oid4vp_requests (
-		id          TEXT PRIMARY KEY,
-		data        TEXT NOT NULL,
-		expires_at  DATETIME NOT NULL
-	);
-	CREATE TABLE IF NOT EXISTS oid4vp_responses (
-		request_id  TEXT PRIMARY KEY,
-		data        TEXT NOT NULL,
-		received_at DATETIME NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_oid4vp_requests_expiry ON oid4vp_requests(expires_at);
-	`)
-	return err
-}
-
 func (s *SQLStore) SaveOID4VPRequest(ctx context.Context, id string, data []byte, expiresAt time.Time) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO oid4vp_requests (id, data, expires_at) VALUES (?,?,?)`, id, string(data), expiresAt)

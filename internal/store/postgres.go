@@ -149,7 +149,8 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
 	tenant_id TEXT,
 	created_at TIMESTAMPTZ NOT NULL,
 	backchannel_logout_uri TEXT,
-	post_logout_redirect_uris JSON
+	post_logout_redirect_uris JSON,
+	jwks TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
@@ -239,13 +240,16 @@ CREATE TABLE IF NOT EXISTS audit_log (
 	event_type TEXT NOT NULL,
 	payload    TEXT NOT NULL,
 	hash       TEXT NOT NULL,
-	prev_hash  TEXT NOT NULL DEFAULT ''
+	prev_hash  TEXT NOT NULL DEFAULT '',
+	hash_version INTEGER NOT NULL DEFAULT 1,
+	recorded_at TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS recovery_configs (
 	subject_did   TEXT PRIMARY KEY,
 	threshold     INTEGER NOT NULL,
 	guardian_dids TEXT NOT NULL,
+	guardian_emails TEXT NOT NULL DEFAULT '{}',
 	created_at    TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -353,4 +357,22 @@ CREATE TABLE IF NOT EXISTS didcomm_seen (
 	PRIMARY KEY (sender, message_id)
 );
 CREATE INDEX IF NOT EXISTS idx_didcomm_seen_until ON didcomm_seen(seen_until);
+
+CREATE TABLE IF NOT EXISTS sdjwt_issued (
+	id           TEXT PRIMARY KEY,
+	subject_did  TEXT NOT NULL,
+	status_list  TEXT NOT NULL,
+	status_index INTEGER NOT NULL,
+	issued_at    TIMESTAMPTZ NOT NULL,
+	expires_at   TIMESTAMPTZ NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS didcomm_inbox (
+	sender      TEXT NOT NULL,
+	message_id  TEXT NOT NULL,
+	type        TEXT NOT NULL,
+	received_at TIMESTAMPTZ NOT NULL,
+	body        TEXT NOT NULL,
+	PRIMARY KEY (sender, message_id)
+);
 `

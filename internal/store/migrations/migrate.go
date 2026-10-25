@@ -140,6 +140,75 @@ func appliedVersions(db *sql.DB) (map[int]bool, error) {
 	return m, rows.Err()
 }
 
+// hooks run Go code in the same transaction as a migration's SQL, for changes that SQL alone cannot
+// express idempotently (SQLite has no ADD COLUMN IF NOT EXISTS).
+var hooks = map[int]func(tx *sql.Tx) error{
+	4: addMissingColumns,
+}
+
+// columnAdd is one column an older table shape may lack.
+type columnAdd struct {
+	table, column, decl string
+}
+
+// reconcileColumns lists every column the server reads or writes that a table created by migrations
+// 001-003 may lack. Each is added only when PRAGMA table_info shows it missing.
+var reconcileColumns = []columnAdd{
+	{"oidc_clients", "backchannel_logout_uri", "TEXT"},
+	{"oidc_clients", "post_logout_redirect_uris", "JSON"},
+	{"oidc_clients", "jwks", "TEXT NOT NULL DEFAULT ''"},
+	{"recovery_requests", "commitment", "TEXT NOT NULL DEFAULT ''"},
+	{"recovery_configs", "guardian_emails", "TEXT NOT NULL DEFAULT '{}'"},
+	{"refresh_tokens", "family_id", "TEXT NOT NULL DEFAULT ''"},
+	{"webhook_subscriptions", "signing_secret", "TEXT NOT NULL DEFAULT ''"},
+	{"totp_credentials", "verified_at", "DATETIME"},
+	{"totp_credentials", "last_step", "INTEGER NOT NULL DEFAULT 0"},
+	{"consent_grants", "revoked_at", "DATETIME"},
+	{"credential_offers", "tx_code_hash", "TEXT NOT NULL DEFAULT ''"},
+	{"audit_log", "hash_version", "INTEGER NOT NULL DEFAULT 1"},
+	{"audit_log", "recorded_at", "TEXT NOT NULL DEFAULT ''"},
+	{"status_lists", "created_at", "DATETIME"},
+}
+
+// addMissingColumns adds each reconcileColumns entry that its table lacks. Existing columns are left alone.
+func addMissingColumns(tx *sql.Tx) error {
+	for _, c := range reconcileColumns {
+		has, err := hasColumn(tx, c.table, c.column)
+		if err != nil {
+			return err
+		}
+		if has {
+			continue
+		}
+		if _, err := tx.Exec(fmt.Sprintf("ALTER TABLE %s ADD COLUMN %s %s", c.table, c.column, c.decl)); err != nil {
+			return fmt.Errorf("add %s.%s: %w", c.table, c.column, err)
+		}
+	}
+	return nil
+}
+
+// hasColumn reports whether table has a column named column. It reads PRAGMA table_info and closes the rows
+// before returning, so the transaction can run other statements afterwards.
+func hasColumn(tx *sql.Tx, table, column string) (bool, error) {
+	rows, err := tx.Query(fmt.Sprintf("PRAGMA table_info(%s)", table))
+	if err != nil {
+		return false, fmt.Errorf("table_info %s: %w", table, err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid, notnull, pk int
+		var name, typ string
+		var dflt sql.NullString
+		if err := rows.Scan(&cid, &name, &typ, &notnull, &dflt, &pk); err != nil {
+			return false, err
+		}
+		if name == column {
+			return true, rows.Err()
+		}
+	}
+	return false, rows.Err()
+}
+
 func apply(db *sql.DB, m Migration) error {
 	tx, err := db.Begin()
 	if err != nil {
@@ -148,6 +217,11 @@ func apply(db *sql.DB, m Migration) error {
 	defer tx.Rollback() //nolint:errcheck
 	if _, err := tx.Exec(m.SQL); err != nil {
 		return fmt.Errorf("exec: %w", err)
+	}
+	if hook, ok := hooks[m.Version]; ok {
+		if err := hook(tx); err != nil {
+			return fmt.Errorf("hook: %w", err)
+		}
 	}
 	if _, err := tx.Exec(
 		`INSERT INTO schema_migrations (version, applied_at) VALUES (?, ?)`,
@@ -171,4 +245,16 @@ func parseName(filename string) (version int, name string, err error) {
 		return 0, "", fmt.Errorf("migrations: invalid version in %q: %w", filename, err)
 	}
 	return v, base[idx+1:], nil
+}
+
+// Latest returns the highest version of the embedded migrations, the schema this build expects.
+func Latest() (int, error) {
+	all, err := Load()
+	if err != nil {
+		return 0, err
+	}
+	if len(all) == 0 {
+		return 0, nil
+	}
+	return all[len(all)-1].Version, nil
 }

@@ -114,6 +114,20 @@ func (s *SMTP) SendMagicLink(ctx context.Context, email, verifyURL string, expir
 	return s.Send(ctx, email, "Your sign-in link", body)
 }
 
+// SendRecoveryNotice tells a guardian that a recovery request started for an account it guards. The
+// message holds the request id only: no token and no share, so an intercepted notice cannot recover
+// anything. It satisfies api.RecoveryNoticeSender.
+func (s *SMTP) SendRecoveryNotice(ctx context.Context, email, requestID, subjectDID string, startedAt time.Time) error {
+	body := "A recovery request was started at " + startedAt.UTC().Format(time.RFC3339) +
+		" for an account you are a guardian of.\n\n" +
+		"Request id: " + requestID + "\n" +
+		"Account: " + subjectDID + "\n\n" +
+		"No action is needed from you yet. If you did not expect this, contact the account operator before you\n" +
+		"release any share.\n\n" +
+		"This message contains no recovery material."
+	return s.Send(ctx, email, "Recovery request for an account you guard", body)
+}
+
 // SendPasswordReset emails a password-reset token. It satisfies api.PasswordResetSender. The
 // token is sent once and works until expiresAt.
 func (s *SMTP) SendPasswordReset(ctx context.Context, identifier, rawToken string, expiresAt time.Time) error {

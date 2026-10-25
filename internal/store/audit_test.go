@@ -2,10 +2,9 @@ package store_test
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
+
 	"fmt"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"sync"
 	"testing"
@@ -38,16 +37,12 @@ func TestConcurrentAuditAppendsFormOneChain(t *testing.T) {
 		t.Fatalf("want %d events, got total=%d listed=%d", appends, total, len(events))
 	}
 
-	prev := ""
+	if err := store.VerifyAuditChain(events); err != nil {
+		t.Fatalf("chain does not verify: %v", err)
+	}
 	for _, e := range events {
-		if e.PrevHash != prev {
-			t.Fatalf("seq %d links to %q, want %q (chain forked)", e.Seq, e.PrevHash, prev)
+		if e.HashVersion != store.AuditHashV2 || e.RecordedAt == "" {
+			t.Fatalf("seq %d: new event is not v2 with a recorded time", e.Seq)
 		}
-		raw, _ := json.Marshal(map[string]string{"event_type": e.EventType, "payload": e.Payload, "prev_hash": e.PrevHash})
-		sum := sha256.Sum256(append([]byte(e.PrevHash), raw...))
-		if got := hex.EncodeToString(sum[:]); got != e.Hash {
-			t.Fatalf("seq %d hash does not recompute", e.Seq)
-		}
-		prev = e.Hash
 	}
 }

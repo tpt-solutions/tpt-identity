@@ -11,28 +11,6 @@ import (
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
-// migrateStatusLists creates the status_lists table. Called from migrate().
-func (s *SQLStore) migrateStatusLists() error {
-	_, err := s.db.Exec(`
-	CREATE TABLE IF NOT EXISTS status_lists (
-		id          TEXT PRIMARY KEY,
-		issuer_did  TEXT NOT NULL,
-		size_bits   INTEGER NOT NULL,
-		next_index  INTEGER NOT NULL DEFAULT 0,
-		bits        BLOB NOT NULL,
-		updated_at  DATETIME NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_status_lists_issuer ON status_lists(issuer_did);
-	`)
-	if err != nil {
-		return err
-	}
-	// Idempotent: databases created before created_at existed gain the column. Lists from before
-	// it have no creation time and sort last.
-	_, _ = s.db.Exec(`ALTER TABLE status_lists ADD COLUMN created_at DATETIME`)
-	return nil
-}
-
 func (s *SQLStore) PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error {
 	b, err := json.Marshal(cred)
 	if err != nil {

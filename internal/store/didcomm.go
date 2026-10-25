@@ -5,18 +5,37 @@ import (
 	"time"
 )
 
-// migrateDIDComm creates the table of received DIDComm message ids. Called from migrate().
-func (s *SQLStore) migrateDIDComm() error {
-	_, err := s.db.Exec(`
-	CREATE TABLE IF NOT EXISTS didcomm_seen (
-		sender     TEXT NOT NULL,
-		message_id TEXT NOT NULL,
-		seen_until DATETIME NOT NULL,
-		PRIMARY KEY (sender, message_id)
-	);
-	CREATE INDEX IF NOT EXISTS idx_didcomm_seen_until ON didcomm_seen(seen_until);
-	`)
+func (s *SQLStore) SaveDIDCommInbox(ctx context.Context, m *DIDCommInboxMessage) error {
+	_, err := s.db.ExecContext(ctx,
+		`INSERT INTO didcomm_inbox (sender, message_id, type, received_at, body) VALUES (?,?,?,?,?)`,
+		m.Sender, m.MessageID, m.Type, m.ReceivedAt.UTC(), m.Body)
+	if err != nil && isUniqueViolation(err) {
+		return ErrDIDCommReplay
+	}
 	return err
+}
+
+func (s *SQLStore) ListDIDCommInbox(ctx context.Context, limit, offset int) ([]*DIDCommInboxMessage, int, error) {
+	var total int
+	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM didcomm_inbox`).Scan(&total); err != nil {
+		return nil, 0, err
+	}
+	rows, err := s.db.QueryContext(ctx,
+		`SELECT sender, message_id, type, received_at, body FROM didcomm_inbox ORDER BY received_at DESC, message_id LIMIT ? OFFSET ?`,
+		limit, offset)
+	if err != nil {
+		return nil, 0, err
+	}
+	defer rows.Close()
+	var out []*DIDCommInboxMessage
+	for rows.Next() {
+		var m DIDCommInboxMessage
+		if err := rows.Scan(&m.Sender, &m.MessageID, &m.Type, &m.ReceivedAt, &m.Body); err != nil {
+			return nil, 0, err
+		}
+		out = append(out, &m)
+	}
+	return out, total, rows.Err()
 }
 
 func (s *SQLStore) RecordDIDCommMessage(ctx context.Context, sender, messageID string, until time.Time) error {

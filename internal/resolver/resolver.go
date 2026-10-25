@@ -27,6 +27,17 @@ type Resolver struct {
 	ttl   time.Duration
 	mu    sync.RWMutex
 	cache map[string]entry
+	// local, when set, answers for DIDs this server hosts. Its answer is not cached, so an update to a
+	// hosted document (for example a newly registered passkey) is visible at once.
+	local func(id string) (*did.Document, bool)
+}
+
+// SetLocal sets the lookup for DIDs this server hosts. Resolve asks it before the network, and a
+// found document is returned without caching. Pinned documents still take precedence.
+func (r *Resolver) SetLocal(lookup func(id string) (*did.Document, bool)) {
+	r.mu.Lock()
+	r.local = lookup
+	r.mu.Unlock()
 }
 
 // New returns a Resolver with the given cache TTL.
@@ -41,8 +52,17 @@ func New(ttl time.Duration) *Resolver {
 func (r *Resolver) Resolve(id string) (*did.Document, error) {
 	r.mu.RLock()
 	e, ok := r.cache[id]
+	local := r.local
 	r.mu.RUnlock()
-	if ok && (e.pinned || time.Now().Before(e.expires)) {
+	if ok && e.pinned {
+		return e.doc, nil
+	}
+	if local != nil {
+		if doc, found := local(id); found {
+			return doc, nil
+		}
+	}
+	if ok && time.Now().Before(e.expires) {
 		return e.doc, nil
 	}
 

@@ -2,9 +2,7 @@ package store
 
 import (
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/tpt-solutions/tpt-identity/internal/store/migrations"
 	"github.com/tpt-solutions/tpt-identity/pkg/consent"
 	"github.com/tpt-solutions/tpt-identity/pkg/did"
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
@@ -50,304 +49,18 @@ func OpenStore(dsn string) (*SQLStore, error) {
 
 func (s *SQLStore) Close() error { return s.db.Close() }
 
-// migrate creates or updates tables. The SQLite path keeps its inline, idempotent schema; the
-// PostgreSQL path creates the complete schema on a fresh database (see pgSchema).
+// migrate brings the database to the current schema. SQLite runs the embedded migrations, which
+// record their versions in schema_migrations. PostgreSQL still builds its schema inline (pgSchema),
+// because the migration runner is SQLite-only.
 func (s *SQLStore) migrate() error {
 	if s.db.d == dialectPostgres {
 		return s.migratePostgres()
 	}
-	_, err := s.db.Exec(`
-	PRAGMA journal_mode=WAL;
-
-	CREATE TABLE IF NOT EXISTS identities (
-		did TEXT PRIMARY KEY,
-		method TEXT NOT NULL,
-		signing_key_path TEXT,
-		enc_key_path TEXT,
-		role TEXT NOT NULL DEFAULT 'user',
-		tenant_id TEXT,
-		created_at DATETIME NOT NULL,
-		updated_at DATETIME NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS did_documents (
-		did TEXT PRIMARY KEY,
-		document JSON NOT NULL,
-		cached_at DATETIME NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS credentials (
-		id TEXT PRIMARY KEY,
-		subject_did TEXT NOT NULL,
-		issuer_did TEXT NOT NULL,
-		schema_id TEXT NOT NULL,
-		valid_from DATETIME NOT NULL,
-		valid_until DATETIME,
-		credential JSON NOT NULL,
-		created_at DATETIME NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_credentials_subject ON credentials(subject_did);
-	CREATE INDEX IF NOT EXISTS idx_credentials_schema ON credentials(schema_id);
-
-	CREATE TABLE IF NOT EXISTS consent_grants (
-		id TEXT PRIMARY KEY,
-		subject_did TEXT NOT NULL,
-		relying_did TEXT NOT NULL,
-		level TEXT NOT NULL,
-		scope_id TEXT NOT NULL,
-		granted_at DATETIME NOT NULL,
-		expires_at DATETIME,
-		explicitly_confirmed INTEGER NOT NULL DEFAULT 0,
-		revoked_at DATETIME
-	);
-	CREATE INDEX IF NOT EXISTS idx_grants_subject ON consent_grants(subject_did);
-
-	CREATE TABLE IF NOT EXISTS consent_receipts (
-		id TEXT PRIMARY KEY,
-		subject_did TEXT NOT NULL,
-		relying_did TEXT NOT NULL,
-		schema_id TEXT NOT NULL,
-		accessed_at DATETIME NOT NULL,
-		legal_basis TEXT NOT NULL,
-		purpose TEXT,
-		signed_by TEXT,
-		signature TEXT
-	);
-	CREATE INDEX IF NOT EXISTS idx_receipts_subject ON consent_receipts(subject_did);
-
-	CREATE TABLE IF NOT EXISTS oidc_sessions (
-		id TEXT PRIMARY KEY,
-		subject_did TEXT NOT NULL,
-		client_id TEXT NOT NULL,
-		redirect_uri TEXT NOT NULL,
-		scope TEXT,
-		nonce TEXT,
-		state TEXT,
-		code TEXT,
-		code_challenge TEXT,
-		code_challenge_method TEXT,
-		access_token TEXT,
-		refresh_token_hash TEXT,
-		user_agent TEXT,
-		ip_address TEXT,
-		last_used_at DATETIME,
-		created_at DATETIME NOT NULL,
-		expires_at DATETIME NOT NULL
-	);
-	CREATE INDEX IF NOT EXISTS idx_sessions_subject ON oidc_sessions(subject_did);
-	CREATE INDEX IF NOT EXISTS idx_sessions_code ON oidc_sessions(code);
-
-	CREATE TABLE IF NOT EXISTS oidc_clients (
-		client_id TEXT PRIMARY KEY,
-		client_secret_hash TEXT,
-		client_name TEXT NOT NULL,
-		redirect_uris JSON NOT NULL,
-		token_endpoint_auth_method TEXT NOT NULL,
-		grant_types JSON NOT NULL,
-		response_types JSON NOT NULL,
-		scope TEXT,
-		tenant_id TEXT,
-		created_at DATETIME NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS refresh_tokens (
-		hash TEXT PRIMARY KEY,
-		family_id TEXT NOT NULL DEFAULT '',
-		subject_did TEXT NOT NULL,
-		client_id TEXT NOT NULL,
-		scope TEXT,
-		issued_at DATETIME NOT NULL,
-		expires_at DATETIME NOT NULL,
-		used_at DATETIME
-	);
-	CREATE INDEX IF NOT EXISTS idx_refresh_subject ON refresh_tokens(subject_did);
-
-	CREATE TABLE IF NOT EXISTS external_provider_links (
-		subject_did TEXT NOT NULL,
-		provider TEXT NOT NULL,
-		external_id TEXT NOT NULL,
-		linked_at DATETIME NOT NULL,
-		last_used_at DATETIME NOT NULL,
-		PRIMARY KEY (provider, external_id)
-	);
-	CREATE INDEX IF NOT EXISTS idx_links_subject ON external_provider_links(subject_did);
-
-	CREATE TABLE IF NOT EXISTS magic_link_tokens (
-		hash TEXT PRIMARY KEY,
-		email TEXT NOT NULL,
-		expires_at DATETIME NOT NULL,
-		created_at DATETIME NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS webauthn_credentials (
-		credential_id TEXT PRIMARY KEY,
-		subject_did TEXT NOT NULL,
-		public_key_cbor BLOB NOT NULL,
-		attestation_type TEXT,
-		aaguid TEXT,
-		sign_count INTEGER NOT NULL DEFAULT 0,
-		name TEXT,
-		transports JSON,
-		created_at DATETIME NOT NULL,
-		last_used_at DATETIME
-	);
-	CREATE INDEX IF NOT EXISTS idx_webauthn_subject ON webauthn_credentials(subject_did);
-
-	CREATE TABLE IF NOT EXISTS totp_credentials (
-		subject_did TEXT PRIMARY KEY,
-		encrypted_secret TEXT NOT NULL,
-		account_name TEXT,
-		created_at DATETIME NOT NULL,
-		verified_at DATETIME,
-		last_step INTEGER NOT NULL DEFAULT 0
-	);
-
-	CREATE TABLE IF NOT EXISTS webhook_subscriptions (
-		id TEXT PRIMARY KEY,
-		url TEXT NOT NULL,
-		event_types JSON NOT NULL,
-		secret_hash TEXT,
-		signing_secret TEXT NOT NULL DEFAULT '',
-		tenant_id TEXT,
-		created_at DATETIME NOT NULL
-	);
-
-	CREATE TABLE IF NOT EXISTS auth_failures (
-		subject_or_email TEXT PRIMARY KEY,
-		count INTEGER NOT NULL DEFAULT 0,
-		last_failure_at DATETIME NOT NULL,
-		locked_until DATETIME
-	);
-
-	CREATE TABLE IF NOT EXISTS passwords (
-		identifier TEXT PRIMARY KEY,
-		hash       TEXT NOT NULL,
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS duress_configs (
-		subject_did TEXT PRIMARY KEY,
-		hash        TEXT NOT NULL,
-		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS audit_log (
-		seq        INTEGER PRIMARY KEY AUTOINCREMENT,
-		timestamp  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		event_type TEXT NOT NULL,
-		payload    TEXT NOT NULL,
-		hash       TEXT NOT NULL,
-		prev_hash  TEXT NOT NULL DEFAULT ''
-	);
-
-	CREATE TABLE IF NOT EXISTS recovery_configs (
-		subject_did   TEXT PRIMARY KEY,
-		threshold     INTEGER NOT NULL,
-		guardian_dids TEXT NOT NULL,
-		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	CREATE TABLE IF NOT EXISTS recovery_requests (
-		id               TEXT PRIMARY KEY,
-		subject_did      TEXT NOT NULL,
-		started_at       DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		shares_collected INTEGER NOT NULL DEFAULT 0,
-		completed        INTEGER NOT NULL DEFAULT 0
-	);
-
-	CREATE TABLE IF NOT EXISTS recovery_shares (
-		request_id   TEXT NOT NULL,
-		guardian_did TEXT NOT NULL,
-		share_hash   TEXT NOT NULL,
-		collected_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
-		PRIMARY KEY (request_id, guardian_did)
-	);
-
-	CREATE TABLE IF NOT EXISTS revoked_access_tokens (
-		hash       TEXT PRIMARY KEY,
-		expires_at DATETIME NOT NULL
-	);
-
-	-- Pushed Authorization Requests (RFC 9126)
-	CREATE TABLE IF NOT EXISTS par_requests (
-		request_uri  TEXT PRIMARY KEY,
-		client_id    TEXT NOT NULL,
-		params       TEXT NOT NULL,
-		expires_at   DATETIME NOT NULL,
-		created_at   DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	-- Device Authorization Grant codes (RFC 8628)
-	CREATE TABLE IF NOT EXISTS device_codes (
-		device_code   TEXT PRIMARY KEY,
-		user_code     TEXT NOT NULL UNIQUE,
-		client_id     TEXT NOT NULL,
-		scope         TEXT NOT NULL DEFAULT '',
-		subject_did   TEXT,
-		approved      INTEGER NOT NULL DEFAULT 0,
-		denied        INTEGER NOT NULL DEFAULT 0,
-		expires_at    DATETIME NOT NULL,
-		interval_secs INTEGER NOT NULL DEFAULT 5,
-		created_at    DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-	CREATE INDEX IF NOT EXISTS idx_device_codes_user_code ON device_codes(user_code);
-
-	-- Password reset tokens
-	CREATE TABLE IF NOT EXISTS password_reset_tokens (
-		hash       TEXT PRIMARY KEY,
-		identifier TEXT NOT NULL,
-		expires_at DATETIME NOT NULL,
-		created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-
-	-- Privacy budget: per-subject, per-schema disclosure counter
-	CREATE TABLE IF NOT EXISTS privacy_disclosures (
-		id            TEXT PRIMARY KEY,
-		subject_did   TEXT NOT NULL,
-		schema_id     TEXT NOT NULL,
-		verifier_did  TEXT NOT NULL,
-		field_names   TEXT NOT NULL,
-		disclosed_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-	CREATE INDEX IF NOT EXISTS idx_privacy_disclosures_subject ON privacy_disclosures(subject_did);
-	CREATE INDEX IF NOT EXISTS idx_privacy_disclosures_schema  ON privacy_disclosures(subject_did, schema_id);
-
-	-- OID4VCI credential offers
-	CREATE TABLE IF NOT EXISTS credential_offers (
-		id          TEXT PRIMARY KEY,
-		client_id   TEXT,
-		schema_ids  TEXT NOT NULL,
-		issuer_did  TEXT NOT NULL,
-		subject_did TEXT,
-		expires_at  DATETIME NOT NULL,
-		used        INTEGER NOT NULL DEFAULT 0,
-		created_at  DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
-	);
-	`)
-	if err != nil {
-		return err
+	// WAL cannot be set inside a transaction, so it runs before the migrations.
+	if _, err := s.db.Exec(`PRAGMA journal_mode=WAL`); err != nil {
+		return fmt.Errorf("journal mode: %w", err)
 	}
-	// Idempotent column additions — errors are ignored.
-	_, _ = s.db.Exec(`ALTER TABLE oidc_clients ADD COLUMN backchannel_logout_uri TEXT`)
-	_, _ = s.db.Exec(`ALTER TABLE oidc_clients ADD COLUMN post_logout_redirect_uris JSON`)
-	_, _ = s.db.Exec(`ALTER TABLE recovery_requests ADD COLUMN commitment TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.db.Exec(`ALTER TABLE refresh_tokens ADD COLUMN family_id TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.db.Exec(`ALTER TABLE webhook_subscriptions ADD COLUMN signing_secret TEXT NOT NULL DEFAULT ''`)
-	_, _ = s.db.Exec(`ALTER TABLE totp_credentials ADD COLUMN verified_at DATETIME`)
-	_, _ = s.db.Exec(`ALTER TABLE totp_credentials ADD COLUMN last_step INTEGER NOT NULL DEFAULT 0`)
-	_, _ = s.db.Exec(`ALTER TABLE consent_grants ADD COLUMN revoked_at DATETIME`)
-	// SHA-256 of the offer PIN (tx_code). Offers from before this column have no hash and are refused.
-	_, _ = s.db.Exec(`ALTER TABLE credential_offers ADD COLUMN tx_code_hash TEXT NOT NULL DEFAULT ''`)
-	if err := s.migrateStatusLists(); err != nil {
-		return err
-	}
-	if err := s.migrateOID4VP(); err != nil {
-		return err
-	}
-	if err := s.migrateDIDComm(); err != nil {
-		return err
-	}
-	return nil
+	return migrations.Up(s.db.DB)
 }
 
 // --- Identities ---
@@ -683,8 +396,8 @@ func (s *SQLStore) SaveClient(ctx context.Context, c *OIDCClient) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO oidc_clients
 		  (client_id, client_secret_hash, client_name, redirect_uris, token_endpoint_auth_method,
-		   grant_types, response_types, scope, tenant_id, backchannel_logout_uri, post_logout_redirect_uris, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+		   grant_types, response_types, scope, tenant_id, backchannel_logout_uri, post_logout_redirect_uris, jwks, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(client_id) DO UPDATE SET
 			client_secret_hash=excluded.client_secret_hash,
 			client_name=excluded.client_name,
@@ -694,16 +407,17 @@ func (s *SQLStore) SaveClient(ctx context.Context, c *OIDCClient) error {
 			response_types=excluded.response_types,
 			scope=excluded.scope,
 			backchannel_logout_uri=excluded.backchannel_logout_uri,
-			post_logout_redirect_uris=excluded.post_logout_redirect_uris`,
+			post_logout_redirect_uris=excluded.post_logout_redirect_uris,
+			jwks=excluded.jwks`,
 		c.ClientID, c.ClientSecretHash, c.ClientName, string(redirectURIs),
 		c.TokenEndpointAuthMethod, string(grantTypes), string(responseTypes),
-		c.Scope, c.TenantID, c.BackchannelLogoutURI, string(postLogoutURIs), c.CreatedAt)
+		c.Scope, c.TenantID, c.BackchannelLogoutURI, string(postLogoutURIs), c.JWKS, c.CreatedAt)
 	return err
 }
 
 const clientSelectCols = `client_id, client_secret_hash, client_name, redirect_uris,
 	token_endpoint_auth_method, grant_types, response_types, scope, tenant_id,
-	COALESCE(backchannel_logout_uri,''), COALESCE(post_logout_redirect_uris,'[]'), created_at`
+	COALESCE(backchannel_logout_uri,''), COALESCE(post_logout_redirect_uris,'[]'), COALESCE(jwks,''), created_at`
 
 func (s *SQLStore) GetClient(ctx context.Context, clientID string) (*OIDCClient, error) {
 	row := s.db.QueryRowContext(ctx,
@@ -739,7 +453,7 @@ func (s *SQLStore) scanClient(row *sql.Row) (*OIDCClient, error) {
 	var redirectURIs, grantTypes, responseTypes, postLogoutURIs string
 	if err := row.Scan(&c.ClientID, &c.ClientSecretHash, &c.ClientName, &redirectURIs,
 		&c.TokenEndpointAuthMethod, &grantTypes, &responseTypes, &c.Scope, &c.TenantID,
-		&c.BackchannelLogoutURI, &postLogoutURIs, &c.CreatedAt); err != nil {
+		&c.BackchannelLogoutURI, &postLogoutURIs, &c.JWKS, &c.CreatedAt); err != nil {
 		return nil, fmt.Errorf("scan client: %w", err)
 	}
 	_ = unmarshalField(redirectURIs, &c.RedirectURIs)
@@ -754,7 +468,7 @@ func (s *SQLStore) scanClientRow(rows *sql.Rows) (*OIDCClient, error) {
 	var redirectURIs, grantTypes, responseTypes, postLogoutURIs string
 	if err := rows.Scan(&c.ClientID, &c.ClientSecretHash, &c.ClientName, &redirectURIs,
 		&c.TokenEndpointAuthMethod, &grantTypes, &responseTypes, &c.Scope, &c.TenantID,
-		&c.BackchannelLogoutURI, &postLogoutURIs, &c.CreatedAt); err != nil {
+		&c.BackchannelLogoutURI, &postLogoutURIs, &c.JWKS, &c.CreatedAt); err != nil {
 		return nil, err
 	}
 	_ = unmarshalField(redirectURIs, &c.RedirectURIs)
@@ -1284,31 +998,40 @@ func (s *SQLStore) AppendAuditEvent(ctx context.Context, eventType, payload stri
 		return nil, fmt.Errorf("audit: read chain head: %w", err)
 	}
 
-	raw, _ := json.Marshal(map[string]string{"event_type": eventType, "payload": payload, "prev_hash": prevHash})
-	sum := sha256.Sum256(append([]byte(prevHash), raw...))
-	hash := hex.EncodeToString(sum[:])
+	// New events are v2: the recorded time is part of the hash. The string is what gets hashed and stored.
+	now := time.Now().UTC()
+	recordedAt := now.Format(time.RFC3339Nano)
+	hash, err := AuditHashOf(AuditHashV2, prevHash, recordedAt, eventType, payload)
+	if err != nil {
+		return nil, err
+	}
 	var id int64
 	if err := tx.QueryRowContext(ctx,
-		`INSERT INTO audit_log (event_type, payload, hash, prev_hash) VALUES (?,?,?,?) RETURNING seq`,
-		eventType, payload, hash, prevHash).Scan(&id); err != nil {
+		`INSERT INTO audit_log (timestamp, event_type, payload, hash, prev_hash, hash_version, recorded_at) VALUES (?,?,?,?,?,?,?) RETURNING seq`,
+		now, eventType, payload, hash, prevHash, AuditHashV2, recordedAt).Scan(&id); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("audit: commit: %w", err)
 	}
 	return &AuditEvent{
-		Seq:       id,
-		Timestamp: time.Now(),
-		EventType: eventType,
-		Payload:   payload,
-		Hash:      hash,
-		PrevHash:  prevHash,
+		Seq:         id,
+		Timestamp:   now,
+		EventType:   eventType,
+		Payload:     payload,
+		Hash:        hash,
+		PrevHash:    prevHash,
+		HashVersion: AuditHashV2,
+		RecordedAt:  recordedAt,
 	}, nil
 }
 
+// auditColumns is the column list every audit read uses, in the order scanAudit reads them.
+const auditColumns = `seq, timestamp, event_type, payload, hash, prev_hash, hash_version, recorded_at`
+
 func (s *SQLStore) GetAuditHead(ctx context.Context) (*AuditEvent, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT seq, timestamp, event_type, payload, hash, prev_hash FROM audit_log ORDER BY seq DESC LIMIT 1`)
+		`SELECT `+auditColumns+` FROM audit_log ORDER BY seq DESC LIMIT 1`)
 	return scanAuditRow(row)
 }
 
@@ -1318,7 +1041,7 @@ func (s *SQLStore) ListAuditEvents(ctx context.Context, limit, offset int) ([]*A
 		return nil, 0, err
 	}
 	rows, err := s.db.QueryContext(ctx,
-		`SELECT seq, timestamp, event_type, payload, hash, prev_hash FROM audit_log ORDER BY seq ASC LIMIT ? OFFSET ?`,
+		`SELECT `+auditColumns+` FROM audit_log ORDER BY seq ASC LIMIT ? OFFSET ?`,
 		limit, offset)
 	if err != nil {
 		return nil, 0, err
@@ -1326,18 +1049,31 @@ func (s *SQLStore) ListAuditEvents(ctx context.Context, limit, offset int) ([]*A
 	defer rows.Close()
 	var events []*AuditEvent
 	for rows.Next() {
-		var e AuditEvent
-		if err := rows.Scan(&e.Seq, &e.Timestamp, &e.EventType, &e.Payload, &e.Hash, &e.PrevHash); err != nil {
+		e, err := scanAudit(rows)
+		if err != nil {
 			return nil, 0, err
 		}
-		events = append(events, &e)
+		events = append(events, e)
 	}
 	return events, total, rows.Err()
 }
 
+// auditScanner is the part of *sql.Row and *sql.Rows that scanAudit needs.
+type auditScanner interface {
+	Scan(dest ...any) error
+}
+
+func scanAudit(sc auditScanner) (*AuditEvent, error) {
+	var e AuditEvent
+	if err := sc.Scan(&e.Seq, &e.Timestamp, &e.EventType, &e.Payload, &e.Hash, &e.PrevHash, &e.HashVersion, &e.RecordedAt); err != nil {
+		return nil, err
+	}
+	return &e, nil
+}
+
 func scanAuditRow(row *sql.Row) (*AuditEvent, error) {
 	var e AuditEvent
-	if err := row.Scan(&e.Seq, &e.Timestamp, &e.EventType, &e.Payload, &e.Hash, &e.PrevHash); err != nil {
+	if err := row.Scan(&e.Seq, &e.Timestamp, &e.EventType, &e.Payload, &e.Hash, &e.PrevHash, &e.HashVersion, &e.RecordedAt); err != nil {
 		return nil, err
 	}
 	return &e, nil
@@ -1347,23 +1083,32 @@ func scanAuditRow(row *sql.Row) (*AuditEvent, error) {
 
 func (s *SQLStore) SaveRecoveryConfig(ctx context.Context, cfg *RecoveryConfig) error {
 	gdids, _ := json.Marshal(cfg.GuardianDIDs)
+	emails := cfg.GuardianEmails
+	if emails == nil {
+		emails = map[string]string{}
+	}
+	gemails, _ := json.Marshal(emails)
 	_, err := s.db.ExecContext(ctx,
-		`INSERT INTO recovery_configs (subject_did, threshold, guardian_dids) VALUES (?,?,?)
-		 ON CONFLICT(subject_did) DO UPDATE SET threshold=excluded.threshold, guardian_dids=excluded.guardian_dids, created_at=CURRENT_TIMESTAMP`,
-		cfg.SubjectDID, cfg.Threshold, string(gdids))
+		`INSERT INTO recovery_configs (subject_did, threshold, guardian_dids, guardian_emails) VALUES (?,?,?,?)
+		 ON CONFLICT(subject_did) DO UPDATE SET threshold=excluded.threshold, guardian_dids=excluded.guardian_dids,
+		   guardian_emails=excluded.guardian_emails, created_at=CURRENT_TIMESTAMP`,
+		cfg.SubjectDID, cfg.Threshold, string(gdids), string(gemails))
 	return err
 }
 
 func (s *SQLStore) GetRecoveryConfig(ctx context.Context, subjectDID string) (*RecoveryConfig, error) {
 	row := s.db.QueryRowContext(ctx,
-		`SELECT subject_did, threshold, guardian_dids, created_at FROM recovery_configs WHERE subject_did=?`, subjectDID)
+		`SELECT subject_did, threshold, guardian_dids, COALESCE(guardian_emails,'{}'), created_at FROM recovery_configs WHERE subject_did=?`, subjectDID)
 	var cfg RecoveryConfig
-	var gdids string
-	if err := row.Scan(&cfg.SubjectDID, &cfg.Threshold, &gdids, &cfg.CreatedAt); err != nil {
+	var gdids, gemails string
+	if err := row.Scan(&cfg.SubjectDID, &cfg.Threshold, &gdids, &gemails, &cfg.CreatedAt); err != nil {
 		return nil, err
 	}
 	if err := unmarshalField(gdids, &cfg.GuardianDIDs); err != nil {
 		slog.Warn("store: recovery guardian_dids unmarshal", "subject", cfg.SubjectDID, "err", err)
+	}
+	if err := unmarshalField(gemails, &cfg.GuardianEmails); err != nil {
+		slog.Warn("store: recovery guardian_emails unmarshal", "subject", cfg.SubjectDID, "err", err)
 	}
 	return &cfg, nil
 }

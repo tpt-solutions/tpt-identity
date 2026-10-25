@@ -36,8 +36,19 @@ type Store interface {
 	PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error
 
 	// RecordDIDCommMessage remembers that sender delivered messageID until the given time. A message seen
-	// before returns ErrDIDCommReplay. sender is "" for anonymous (anoncrypt) messages.
+	// before returns ErrDIDCommReplay. sender is "" for anonymous (anoncrypt) messages. The table is a
+	// general replay guard: client assertion ids are recorded here too, under the sender
+	// "client_assertion:<client_id>".
 	RecordDIDCommMessage(ctx context.Context, sender, messageID string, until time.Time) error
+	// SaveDIDCommInbox keeps a received message for the operator. Nothing acts on it automatically. A message
+	// already in the inbox for the same sender and id returns ErrDIDCommReplay.
+	SaveDIDCommInbox(ctx context.Context, m *DIDCommInboxMessage) error
+	// ListDIDCommInbox returns stored messages, newest first, and the total count.
+	ListDIDCommInbox(ctx context.Context, limit, offset int) ([]*DIDCommInboxMessage, int, error)
+
+	// --- SD-JWT credentials this server issued (revocation is by id) ---
+	SaveSDJWTIssued(ctx context.Context, rec *SDJWTIssued) error
+	GetSDJWTIssued(ctx context.Context, id string) (*SDJWTIssued, error)
 
 	// --- OID4VP presentation state (JSON documents owned by the oidc package) ---
 	// SaveOID4VPRequest stores a request until expiresAt. It returns ErrOID4VPRequestExists for a reused id.
@@ -201,6 +212,10 @@ type Store interface {
 	GetCredentialOffer(ctx context.Context, id string) (*CredentialOffer, error)
 	MarkCredentialOfferUsed(ctx context.Context, id string) error
 
+	// SchemaVersion returns the migration version the database has applied. It returns
+	// ErrSchemaVersionUnsupported on a backend that does not track one.
+	SchemaVersion(ctx context.Context) (int, error)
+
 	// Close releases resources.
 	Close() error
 }
@@ -253,8 +268,11 @@ type OIDCClient struct {
 	// BackchannelLogoutURI is the OIDC Back-Channel Logout 1.0 URI. Optional.
 	BackchannelLogoutURI string `json:"backchannelLogoutUri,omitempty"`
 	// PostLogoutRedirectURIs are validated targets for RP-initiated logout (RFC 9596).
-	PostLogoutRedirectURIs []string  `json:"postLogoutRedirectUris,omitempty"`
-	CreatedAt              time.Time `json:"createdAt"`
+	PostLogoutRedirectURIs []string `json:"postLogoutRedirectUris,omitempty"`
+	// JWKS is the client's public key set (RFC 7517 JSON) for private_key_jwt authentication. The keys are
+	// public, so they are not hidden. Empty for clients that do not use private_key_jwt.
+	JWKS      string    `json:"jwks,omitempty"`
+	CreatedAt time.Time `json:"createdAt"`
 }
 
 // RefreshToken stores a hashed refresh token for rotation.
@@ -330,16 +348,24 @@ type AuditEvent struct {
 	Timestamp time.Time `json:"timestamp"`
 	EventType string    `json:"event_type"`
 	Payload   string    `json:"payload"`   // JSON string
-	Hash      string    `json:"hash"`      // SHA-256(prev_hash || event_json)
+	Hash      string    `json:"hash"`      // see HashVersion
 	PrevHash  string    `json:"prev_hash"` // hash of the previous event; empty for the first
+	// HashVersion selects the hash formula (AuditHashV1 or AuditHashV2). 0 means v1.
+	HashVersion int `json:"hash_version"`
+	// RecordedAt is the time covered by a v2 hash, as the exact RFC 3339 string that was hashed.
+	// Empty for v1 rows.
+	RecordedAt string `json:"recorded_at,omitempty"`
 }
 
 // RecoveryConfig stores the guardian configuration for M-of-N key recovery.
 type RecoveryConfig struct {
-	SubjectDID   string    `json:"subject_did"`
-	Threshold    int       `json:"threshold"` // minimum guardians required
-	GuardianDIDs []string  `json:"guardian_dids"`
-	CreatedAt    time.Time `json:"created_at"`
+	SubjectDID   string   `json:"subject_did"`
+	Threshold    int      `json:"threshold"` // minimum guardians required
+	GuardianDIDs []string `json:"guardian_dids"`
+	// GuardianEmails maps guardian DIDs to the address that receives recovery notices. Optional. It is
+	// contact data, so it is never returned by the API.
+	GuardianEmails map[string]string `json:"-"`
+	CreatedAt      time.Time         `json:"created_at"`
 }
 
 // RecoveryRequest is an in-progress recovery initiated by a subject.
@@ -441,6 +467,26 @@ var ErrOID4VPRequestExists = errors.New("oid4vp request already exists")
 
 // ErrOID4VPResponseExists means the request already has its response.
 var ErrOID4VPResponseExists = errors.New("oid4vp response already received")
+
+// SDJWTIssued records one SD-JWT credential the server issued: its id (the jti), the status list it is in,
+// and its bit index there. Revoking the id sets that bit.
+type SDJWTIssued struct {
+	ID          string
+	SubjectDID  string
+	StatusList  string // the status list's id, the same ID the bitstring status list is stored under
+	StatusIndex int
+	IssuedAt    time.Time
+	ExpiresAt   time.Time
+}
+
+// DIDCommInboxMessage is a decrypted DIDComm message kept for the operator.
+type DIDCommInboxMessage struct {
+	Sender     string    `json:"sender"` // authenticated sender DID; "" for an anonymous (anoncrypt) message
+	MessageID  string    `json:"message_id"`
+	Type       string    `json:"type"`
+	ReceivedAt time.Time `json:"received_at"`
+	Body       string    `json:"body"` // the decrypted message, JSON
+}
 
 // ErrDIDCommReplay means a DIDComm message id was already received from that sender.
 var ErrDIDCommReplay = errors.New("didcomm message already received")
