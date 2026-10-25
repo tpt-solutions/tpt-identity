@@ -6,6 +6,8 @@ import (
 	"fmt"
 
 	"github.com/spf13/viper"
+
+	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
 // previousKeyEntry is one retired signing key in identity.previous_keys: its kid and its raw
@@ -47,4 +49,13 @@ func loadPreviousKeys() ([]retiredKey, error) {
 		return nil, fmt.Errorf("identity.previous_keys: %w", err)
 	}
 	return parsePreviousKeys(entries)
+}
+
+// retiredForDID converts retired keys to the form the platform DID document lists them in.
+func retiredForDID(keys []retiredKey) []did.RetiredKey {
+	out := make([]did.RetiredKey, 0, len(keys))
+	for _, k := range keys {
+		out = append(out, did.RetiredKey{ID: k.kid, Pub: k.pub})
+	}
+	return out
 }

@@ -14,6 +14,7 @@ receipts, and an OIDC identity provider built on open standards.`,
 	root.PersistentFlags().StringVar(&cfgFile, "config", "config.yaml", "config file path")
 	root.AddCommand(serveCmd())
 	root.AddCommand(keygenCmd())
+	root.AddCommand(rotateKeyCmd())
 	root.AddCommand(resolveCmd())
 	root.AddCommand(issueVCCmd())
 	root.AddCommand(verifyVCCmd())

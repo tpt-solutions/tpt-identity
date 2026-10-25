@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/viper"
 	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/internal/store/migrations"
 	_ "modernc.org/sqlite"
@@ -82,7 +81,13 @@ func migrateVersionCmd() *cobra.Command {
 // server runs against. The migration files are SQLite SQL; a PostgreSQL database gets its schema
 // when the server opens it, so migrate does not manage it.
 func openMigrationDB() (*sql.DB, error) {
-	dbPath := viper.GetString("db_path")
+	// Read the file named by --config. Only serve loads it into the global viper, so migrate would
+	// otherwise see no db_path and create a database in the working directory.
+	cfg, err := readConfig(cfgFile)
+	if err != nil {
+		return nil, fmt.Errorf("read config %s: %w", cfgFile, err)
+	}
+	dbPath := cfg.GetString("db_path")
 	if store.IsPostgresDSN(dbPath) {
 		return nil, errors.New("migrate manages SQLite schemas only; a PostgreSQL schema is created when the server starts")
 	}

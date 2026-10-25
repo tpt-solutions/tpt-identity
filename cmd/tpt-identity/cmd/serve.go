@@ -228,8 +228,10 @@ func serveCmd() *cobra.Command {
 				TotpPassphrase:        totpPassphrase,
 				SigningKey:            ks.SigningPriv,
 				SigningKeyID:          keyID,
+				RetiredSigningKeys:    retiredForDID(retired),
 				EncKey:                ks.EncPriv,
 				EncKeyID:              encKeyID,
+				DIDCommAcceptedTypes:  viper.GetStringSlice("didcomm.accepted_types"),
 				Store:                 db,
 				Resolver:              res,
 				OIDC:                  oidcProvider,
@@ -256,6 +258,7 @@ func serveCmd() *cobra.Command {
 				}
 				srvCfg.MagicLinkSender = mailer
 				srvCfg.PasswordResetSender = mailer
+				srvCfg.RecoveryNoticeSender = mailer
 				logger.Info("email delivery enabled", "smtp_host", host)
 			}
 			srv := api.NewServer(srvCfg)

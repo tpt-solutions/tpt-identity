@@ -115,6 +115,12 @@ func validateConfig(path string) []configProblem {
 			add("error", "identity.previous_keys is malformed: %v", err)
 		} else if _, err := parsePreviousKeys(entries); err != nil {
 			add("error", "%v", err)
+		} else if current := v.GetString("identity.key_id"); current != "" {
+			for _, e := range entries {
+				if e.Kid == current {
+					add("error", "identity.previous_keys lists %q, which is the current identity.key_id", e.Kid)
+				}
+			}
 		}
 	}
 	if v.GetString("api_key") == "" {
@@ -137,9 +143,10 @@ func validateConfig(path string) []configProblem {
 	}
 
 	var scoped []struct {
-		Name   string   `mapstructure:"name"`
-		Key    string   `mapstructure:"key"`
-		Scopes []string `mapstructure:"scopes"`
+		Name     string   `mapstructure:"name"`
+		Key      string   `mapstructure:"key"`
+		Scopes   []string `mapstructure:"scopes"`
+		TenantID string   `mapstructure:"tenant_id"`
 	}
 	if v.IsSet("scoped_api_keys") {
 		if err := v.UnmarshalKey("scoped_api_keys", &scoped); err != nil {
@@ -159,6 +166,13 @@ func validateConfig(path string) []configProblem {
 		}
 		if len(k.Scopes) == 0 {
 			add("error", "scoped_api_keys %s grants no scopes", label)
+		}
+		if k.TenantID != "" {
+			for _, scope := range k.Scopes {
+				if scope == "admin" {
+					add("error", "scoped_api_keys %s is tenant-bound and cannot hold the admin scope", label)
+				}
+			}
 		}
 	}
 
@@ -197,6 +211,7 @@ var knownConfigKeys = map[string]bool{
 	"identity.key_id":             true,
 	"identity.previous_keys":      true,
 	"identity.enc_key_id":         true,
+	"didcomm.accepted_types":      true,
 	"oidc.code_ttl":               true,
 	"oidc.id_token_ttl":           true,
 	"oidc.access_token_ttl":       true,
