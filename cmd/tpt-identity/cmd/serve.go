@@ -63,7 +63,7 @@ func serveCmd() *cobra.Command {
 			}
 			logger := slog.New(logHandler)
 
-			db, err := store.OpenSQLite(viper.GetString("db_path"))
+			db, err := store.OpenStore(viper.GetString("db_path"))
 			if err != nil {
 				return fmt.Errorf("open db: %w", err)
 			}

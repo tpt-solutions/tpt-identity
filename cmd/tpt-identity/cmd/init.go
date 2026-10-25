@@ -139,13 +139,13 @@ func runInit(cmd *cobra.Command, opts initOptions) error {
 		return fmt.Errorf("write config: %w", err)
 	}
 
-	fmt.Fprintf(out, "Wrote %s, %s, %s and %s.\n", cfgPath, signPath, encPath, dbPath)
+	_, _ = fmt.Fprintf(out, "Wrote %s, %s, %s and %s.\n", cfgPath, signPath, encPath, dbPath)
 	if opts.Profile == "dev" {
-		fmt.Fprintln(out, "Keys are plaintext. Do not use this profile in production.")
+		_, _ = fmt.Fprintln(out, "Keys are plaintext. Do not use this profile in production.")
 	} else {
-		fmt.Fprintln(out, "Keys are encrypted. Give serve the passphrase with TPT_IDENTITY_IDENTITY_PASSPHRASE; it is not written to the config.")
+		_, _ = fmt.Fprintln(out, "Keys are encrypted. Give serve the passphrase with TPT_IDENTITY_IDENTITY_PASSPHRASE; it is not written to the config.")
 	}
-	fmt.Fprintf(out, "Next: tpt-identity config validate --config %s, then tpt-identity serve --config %s\n", cfgPath, cfgPath)
+	_, _ = fmt.Fprintf(out, "Next: tpt-identity config validate --config %s, then tpt-identity serve --config %s\n", cfgPath, cfgPath)
 	return nil
 }
 

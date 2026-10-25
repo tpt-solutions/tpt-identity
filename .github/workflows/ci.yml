@@ -12,6 +12,23 @@ jobs:
   test:
     name: Build, vet and test
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: tpt
+          POSTGRES_PASSWORD: testpass
+          POSTGRES_DB: tpt
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U tpt"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # The store contract tests run against this PostgreSQL service as well as SQLite.
+      TPT_TEST_POSTGRES_DSN: postgres://tpt:testpass@localhost:5432/tpt?sslmode=disable
     steps:
       - uses: actions/checkout@v4
 

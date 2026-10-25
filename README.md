@@ -138,7 +138,7 @@ Copy `config.yaml.example` to `config.yaml`. All keys can be overridden via envi
 |-----|-------------|
 | `issuer` | Canonical HTTPS URL — used as OIDC issuer and `did:web` base _(required)_ |
 | `listen_addr` | HTTP bind address (default `:8080`) |
-| `db_path` | SQLite database file path |
+| `db_path` | SQLite database file path, or a `postgres://` URL to use PostgreSQL (schema created on start; `migrate` manages SQLite only) |
 | `api_key` | Bearer token for admin/service endpoints |
 | `identity.signing_key` | Path to Ed25519 private key PEM |
 | `identity.passphrase` | Argon2id passphrase for key decryption |

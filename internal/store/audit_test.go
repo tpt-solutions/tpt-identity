@@ -6,21 +6,16 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"sync"
 	"testing"
-
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // Concurrent appends form one chain: each event links to the event before it, and every hash
 // recomputes from its fields. A forked head would show up as a broken link.
 func TestConcurrentAuditAppendsFormOneChain(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	const appends = 40
 	var wg sync.WaitGroup

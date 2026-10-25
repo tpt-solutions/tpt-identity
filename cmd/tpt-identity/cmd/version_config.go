@@ -70,14 +70,23 @@ type configProblem struct {
 	msg   string
 }
 
-// validateConfig loads path and returns every problem found, in a stable order.
-func validateConfig(path string) []configProblem {
+// readConfig loads path with the same environment overrides the server uses.
+func readConfig(path string) (*viper.Viper, error) {
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
 	v.SetEnvPrefix("TPT_IDENTITY")
 	v.AutomaticEnv()
 	if err := v.ReadInConfig(); err != nil {
+		return nil, err
+	}
+	return v, nil
+}
+
+// validateConfig loads path and returns every problem found, in a stable order.
+func validateConfig(path string) []configProblem {
+	v, err := readConfig(path)
+	if err != nil {
 		return []configProblem{{"error", fmt.Sprintf("cannot read %s: %v", path, err)}}
 	}
 

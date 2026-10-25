@@ -6,7 +6,7 @@ import (
 )
 
 // migrateDIDComm creates the table of received DIDComm message ids. Called from migrate().
-func (s *SQLiteStore) migrateDIDComm() error {
+func (s *SQLStore) migrateDIDComm() error {
 	_, err := s.db.Exec(`
 	CREATE TABLE IF NOT EXISTS didcomm_seen (
 		sender     TEXT NOT NULL,
@@ -19,7 +19,7 @@ func (s *SQLiteStore) migrateDIDComm() error {
 	return err
 }
 
-func (s *SQLiteStore) RecordDIDCommMessage(ctx context.Context, sender, messageID string, until time.Time) error {
+func (s *SQLStore) RecordDIDCommMessage(ctx context.Context, sender, messageID string, until time.Time) error {
 	// Forget entries that can no longer be replayed, so the table stays bounded by the replay window.
 	if _, err := s.db.ExecContext(ctx, `DELETE FROM didcomm_seen WHERE seen_until < ?`, time.Now().UTC()); err != nil {
 		return err

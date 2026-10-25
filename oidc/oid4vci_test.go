@@ -1,24 +1,20 @@
 package oidc_test
 
 import (
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
 	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
 
 // An ordinary user access token (no credential scope) must not mint credentials.
 func TestCredentialEndpointRejectsUserToken(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	_, priv, _ := crypto.GenerateSigningKey()
 	saveTestIdentity(t, st, "did:peer:user")

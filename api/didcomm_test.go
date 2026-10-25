@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -10,7 +11,6 @@ import (
 
 	"github.com/tpt-solutions/tpt-identity/api"
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
 	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 	"github.com/tpt-solutions/tpt-identity/pkg/did"
@@ -31,11 +31,7 @@ type dcFixture struct {
 // own X25519 key.
 func newDIDCommFixture(t *testing.T) *dcFixture {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	_, signPriv, _ := crypto.GenerateSigningKey()
 	recipPub, recipPriv, _ := crypto.GenerateEncryptionKey()

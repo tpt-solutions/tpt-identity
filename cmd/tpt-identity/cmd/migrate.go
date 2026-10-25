@@ -2,10 +2,12 @@ package cmd
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/internal/store/migrations"
 	_ "modernc.org/sqlite"
 )
@@ -76,8 +78,14 @@ func migrateVersionCmd() *cobra.Command {
 	}
 }
 
+// openMigrationDB opens the database the server uses (db_path), so migrate inspects the schema the
+// server runs against. The migration files are SQLite SQL; a PostgreSQL database gets its schema
+// when the server opens it, so migrate does not manage it.
 func openMigrationDB() (*sql.DB, error) {
-	dbPath := viper.GetString("database.path")
+	dbPath := viper.GetString("db_path")
+	if store.IsPostgresDSN(dbPath) {
+		return nil, errors.New("migrate manages SQLite schemas only; a PostgreSQL schema is created when the server starts")
+	}
 	if dbPath == "" {
 		dbPath = "tpt-identity.db"
 	}

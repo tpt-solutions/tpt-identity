@@ -18,19 +18,20 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// SQLiteStore implements Store using SQLite via modernc (pure-Go, no CGo).
-type SQLiteStore struct {
-	db *sql.DB
+// SQLStore implements Store over SQLite (modernc, pure-Go, no CGo) or PostgreSQL (pgx). The query
+// code is shared; the dialect decides placeholders, DDL and transaction locking.
+type SQLStore struct {
+	db sqlDB
 }
 
 // OpenSQLite opens (or creates) a SQLite database at path and runs migrations.
-func OpenSQLite(path string) (*SQLiteStore, error) {
+func OpenSQLite(path string) (*SQLStore, error) {
 	db, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite: %w", err)
 	}
 	db.SetMaxOpenConns(1) // SQLite is single-writer
-	s := &SQLiteStore{db: db}
+	s := &SQLStore{db: sqlDB{DB: db, d: dialectSQLite}}
 	if err := s.migrate(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("migrate: %w", err)
@@ -38,10 +39,23 @@ func OpenSQLite(path string) (*SQLiteStore, error) {
 	return s, nil
 }
 
-func (s *SQLiteStore) Close() error { return s.db.Close() }
+// OpenStore opens the database named by dsn: a postgres:// or postgresql:// URL selects PostgreSQL,
+// anything else is a SQLite file path.
+func OpenStore(dsn string) (*SQLStore, error) {
+	if IsPostgresDSN(dsn) {
+		return OpenPostgres(dsn)
+	}
+	return OpenSQLite(dsn)
+}
 
-// migrate creates or updates tables. Schema is designed to be PostgreSQL-compatible.
-func (s *SQLiteStore) migrate() error {
+func (s *SQLStore) Close() error { return s.db.Close() }
+
+// migrate creates or updates tables. The SQLite path keeps its inline, idempotent schema; the
+// PostgreSQL path creates the complete schema on a fresh database (see pgSchema).
+func (s *SQLStore) migrate() error {
+	if s.db.d == dialectPostgres {
+		return s.migratePostgres()
+	}
 	_, err := s.db.Exec(`
 	PRAGMA journal_mode=WAL;
 
@@ -343,7 +357,7 @@ type execer interface {
 	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
 }
 
-func (s *SQLiteStore) SaveIdentity(ctx context.Context, id *Identity) error {
+func (s *SQLStore) SaveIdentity(ctx context.Context, id *Identity) error {
 	return saveIdentity(ctx, s.db, id)
 }
 
@@ -367,7 +381,7 @@ func saveIdentity(ctx context.Context, ex execer, id *Identity) error {
 
 // CreateIdentityWithDocument stores an identity and its DID document in one transaction,
 // so a failure cannot leave one without the other.
-func (s *SQLiteStore) CreateIdentityWithDocument(ctx context.Context, id *Identity, doc *did.Document) error {
+func (s *SQLStore) CreateIdentityWithDocument(ctx context.Context, id *Identity, doc *did.Document) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -382,7 +396,7 @@ func (s *SQLiteStore) CreateIdentityWithDocument(ctx context.Context, id *Identi
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) GetIdentity(ctx context.Context, did string) (*Identity, error) {
+func (s *SQLStore) GetIdentity(ctx context.Context, did string) (*Identity, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT did, method, signing_key_path, enc_key_path, role, tenant_id, created_at, updated_at FROM identities WHERE did=?`, did)
 	var id Identity
 	if err := row.Scan(&id.DID, &id.Method, &id.SigningKeyPath, &id.EncKeyPath, &id.Role, &id.TenantID, &id.CreatedAt, &id.UpdatedAt); err != nil {
@@ -391,7 +405,7 @@ func (s *SQLiteStore) GetIdentity(ctx context.Context, did string) (*Identity, e
 	return &id, nil
 }
 
-func (s *SQLiteStore) ListIdentities(ctx context.Context, limit, offset int) ([]*Identity, int, error) {
+func (s *SQLStore) ListIdentities(ctx context.Context, limit, offset int) ([]*Identity, int, error) {
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM identities`).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("list identities count: %w", err)
@@ -412,7 +426,7 @@ func (s *SQLiteStore) ListIdentities(ctx context.Context, limit, offset int) ([]
 	return ids, total, rows.Err()
 }
 
-func (s *SQLiteStore) UpdateIdentity(ctx context.Context, id *Identity) error {
+func (s *SQLStore) UpdateIdentity(ctx context.Context, id *Identity) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE identities SET role=?, tenant_id=?, updated_at=? WHERE did=?`,
 		id.Role, id.TenantID, id.UpdatedAt, id.DID)
 	return err
@@ -420,7 +434,7 @@ func (s *SQLiteStore) UpdateIdentity(ctx context.Context, id *Identity) error {
 
 // --- DID Documents ---
 
-func (s *SQLiteStore) SaveDocument(ctx context.Context, doc *did.Document) error {
+func (s *SQLStore) SaveDocument(ctx context.Context, doc *did.Document) error {
 	return saveDocument(ctx, s.db, doc)
 }
 
@@ -434,7 +448,7 @@ func saveDocument(ctx context.Context, ex execer, doc *did.Document) error {
 	return err
 }
 
-func (s *SQLiteStore) GetDocument(ctx context.Context, id string) (*did.Document, error) {
+func (s *SQLStore) GetDocument(ctx context.Context, id string) (*did.Document, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT document FROM did_documents WHERE did=?`, id)
 	var raw string
 	if err := row.Scan(&raw); err != nil {
@@ -446,7 +460,7 @@ func (s *SQLiteStore) GetDocument(ctx context.Context, id string) (*did.Document
 
 // --- Verifiable Credentials ---
 
-func (s *SQLiteStore) SaveCredential(ctx context.Context, cred *vc.VerifiableCredential) error {
+func (s *SQLStore) SaveCredential(ctx context.Context, cred *vc.VerifiableCredential) error {
 	b, err := json.Marshal(cred)
 	if err != nil {
 		return err
@@ -460,7 +474,7 @@ func (s *SQLiteStore) SaveCredential(ctx context.Context, cred *vc.VerifiableCre
 	return err
 }
 
-func (s *SQLiteStore) GetCredential(ctx context.Context, id string) (*vc.VerifiableCredential, error) {
+func (s *SQLStore) GetCredential(ctx context.Context, id string) (*vc.VerifiableCredential, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT credential FROM credentials WHERE id=?`, id)
 	var raw string
 	if err := row.Scan(&raw); err != nil {
@@ -470,7 +484,7 @@ func (s *SQLiteStore) GetCredential(ctx context.Context, id string) (*vc.Verifia
 	return &cred, json.Unmarshal([]byte(raw), &cred)
 }
 
-func (s *SQLiteStore) ListCredentials(ctx context.Context, subjectDID string) ([]*vc.VerifiableCredential, error) {
+func (s *SQLStore) ListCredentials(ctx context.Context, subjectDID string) ([]*vc.VerifiableCredential, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT credential FROM credentials WHERE subject_did=? ORDER BY valid_from DESC`, subjectDID)
 	if err != nil {
 		return nil, err
@@ -479,14 +493,14 @@ func (s *SQLiteStore) ListCredentials(ctx context.Context, subjectDID string) ([
 	return scanCredentials(rows)
 }
 
-func (s *SQLiteStore) DeleteCredential(ctx context.Context, id string) error {
+func (s *SQLStore) DeleteCredential(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM credentials WHERE id=?`, id)
 	return err
 }
 
 // --- Consent Grants ---
 
-func (s *SQLiteStore) SaveGrant(ctx context.Context, g *consent.Grant) error {
+func (s *SQLStore) SaveGrant(ctx context.Context, g *consent.Grant) error {
 	confirmed := 0
 	if g.ExplicitlyConfirmed {
 		confirmed = 1
@@ -496,7 +510,7 @@ func (s *SQLiteStore) SaveGrant(ctx context.Context, g *consent.Grant) error {
 	return err
 }
 
-func (s *SQLiteStore) GetGrant(ctx context.Context, id string) (*consent.Grant, error) {
+func (s *SQLStore) GetGrant(ctx context.Context, id string) (*consent.Grant, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed, revoked_at FROM consent_grants WHERE id=?`, id)
 	var g consent.Grant
 	var confirmed int
@@ -511,7 +525,7 @@ func (s *SQLiteStore) GetGrant(ctx context.Context, id string) (*consent.Grant, 
 	return &g, nil
 }
 
-func (s *SQLiteStore) ListGrants(ctx context.Context, subjectDID string) ([]*consent.Grant, error) {
+func (s *SQLStore) ListGrants(ctx context.Context, subjectDID string) ([]*consent.Grant, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed, revoked_at FROM consent_grants WHERE subject_did=? ORDER BY granted_at DESC`, subjectDID)
 	if err != nil {
 		return nil, err
@@ -534,7 +548,7 @@ func (s *SQLiteStore) ListGrants(ctx context.Context, subjectDID string) ([]*con
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) RevokeGrant(ctx context.Context, id string, at time.Time) (bool, error) {
+func (s *SQLStore) RevokeGrant(ctx context.Context, id string, at time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE consent_grants SET revoked_at=? WHERE id=? AND revoked_at IS NULL`, at.UTC(), id)
 	if err != nil {
 		return false, err
@@ -545,13 +559,13 @@ func (s *SQLiteStore) RevokeGrant(ctx context.Context, id string, at time.Time) 
 
 // --- Consent Receipts ---
 
-func (s *SQLiteStore) SaveReceipt(ctx context.Context, r *consent.Receipt) error {
+func (s *SQLStore) SaveReceipt(ctx context.Context, r *consent.Receipt) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO consent_receipts (id, subject_did, relying_did, schema_id, accessed_at, legal_basis, purpose, signed_by, signature) VALUES (?,?,?,?,?,?,?,?,?)`,
 		r.ID, r.SubjectDID, r.RelyingDID, r.SchemaID, r.AccessedAt, string(r.LegalBasis), r.Purpose, r.SignedBy, r.Signature)
 	return err
 }
 
-func (s *SQLiteStore) ListReceipts(ctx context.Context, subjectDID string) ([]*consent.Receipt, error) {
+func (s *SQLStore) ListReceipts(ctx context.Context, subjectDID string) ([]*consent.Receipt, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, subject_did, relying_did, schema_id, accessed_at, legal_basis, purpose, signed_by, signature FROM consent_receipts WHERE subject_did=? ORDER BY accessed_at DESC`, subjectDID)
 	if err != nil {
 		return nil, err
@@ -572,7 +586,7 @@ func (s *SQLiteStore) ListReceipts(ctx context.Context, subjectDID string) ([]*c
 
 const sessionCols = `id, subject_did, client_id, redirect_uri, scope, nonce, state, code, code_challenge, code_challenge_method, access_token, refresh_token_hash, user_agent, ip_address, last_used_at, created_at, expires_at`
 
-func (s *SQLiteStore) SaveSession(ctx context.Context, sess *OIDCSession) error {
+func (s *SQLStore) SaveSession(ctx context.Context, sess *OIDCSession) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO oidc_sessions (`+sessionCols+`)
 		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
@@ -592,15 +606,15 @@ func (s *SQLiteStore) SaveSession(ctx context.Context, sess *OIDCSession) error 
 	return err
 }
 
-func (s *SQLiteStore) GetSession(ctx context.Context, id string) (*OIDCSession, error) {
+func (s *SQLStore) GetSession(ctx context.Context, id string) (*OIDCSession, error) {
 	return s.scanSession(s.db.QueryRowContext(ctx, `SELECT `+sessionCols+` FROM oidc_sessions WHERE id=?`, id))
 }
 
-func (s *SQLiteStore) GetSessionByCode(ctx context.Context, code string) (*OIDCSession, error) {
+func (s *SQLStore) GetSessionByCode(ctx context.Context, code string) (*OIDCSession, error) {
 	return s.scanSession(s.db.QueryRowContext(ctx, `SELECT `+sessionCols+` FROM oidc_sessions WHERE code=?`, code))
 }
 
-func (s *SQLiteStore) ListSessionsBySubject(ctx context.Context, subjectDID string) ([]*OIDCSession, error) {
+func (s *SQLStore) ListSessionsBySubject(ctx context.Context, subjectDID string) ([]*OIDCSession, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT `+sessionCols+` FROM oidc_sessions WHERE subject_did=? AND expires_at > ? ORDER BY created_at DESC`, subjectDID, time.Now())
 	if err != nil {
 		return nil, err
@@ -617,17 +631,17 @@ func (s *SQLiteStore) ListSessionsBySubject(ctx context.Context, subjectDID stri
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteSession(ctx context.Context, id string) error {
+func (s *SQLStore) DeleteSession(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM oidc_sessions WHERE id=?`, id)
 	return err
 }
 
-func (s *SQLiteStore) PurgeExpiredSessions(ctx context.Context) error {
+func (s *SQLStore) PurgeExpiredSessions(ctx context.Context) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM oidc_sessions WHERE expires_at < ?`, time.Now())
 	return err
 }
 
-func (s *SQLiteStore) scanSession(row *sql.Row) (*OIDCSession, error) {
+func (s *SQLStore) scanSession(row *sql.Row) (*OIDCSession, error) {
 	var sess OIDCSession
 	var lastUsedAt sql.NullTime
 	if err := row.Scan(
@@ -643,7 +657,7 @@ func (s *SQLiteStore) scanSession(row *sql.Row) (*OIDCSession, error) {
 	return &sess, nil
 }
 
-func (s *SQLiteStore) scanSessionRow(rows *sql.Rows) (*OIDCSession, error) {
+func (s *SQLStore) scanSessionRow(rows *sql.Rows) (*OIDCSession, error) {
 	var sess OIDCSession
 	var lastUsedAt sql.NullTime
 	if err := rows.Scan(
@@ -661,7 +675,7 @@ func (s *SQLiteStore) scanSessionRow(rows *sql.Rows) (*OIDCSession, error) {
 
 // --- OIDC Clients ---
 
-func (s *SQLiteStore) SaveClient(ctx context.Context, c *OIDCClient) error {
+func (s *SQLStore) SaveClient(ctx context.Context, c *OIDCClient) error {
 	redirectURIs, _ := json.Marshal(c.RedirectURIs)
 	grantTypes, _ := json.Marshal(c.GrantTypes)
 	responseTypes, _ := json.Marshal(c.ResponseTypes)
@@ -691,13 +705,13 @@ const clientSelectCols = `client_id, client_secret_hash, client_name, redirect_u
 	token_endpoint_auth_method, grant_types, response_types, scope, tenant_id,
 	COALESCE(backchannel_logout_uri,''), COALESCE(post_logout_redirect_uris,'[]'), created_at`
 
-func (s *SQLiteStore) GetClient(ctx context.Context, clientID string) (*OIDCClient, error) {
+func (s *SQLStore) GetClient(ctx context.Context, clientID string) (*OIDCClient, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT `+clientSelectCols+` FROM oidc_clients WHERE client_id=?`, clientID)
 	return s.scanClient(row)
 }
 
-func (s *SQLiteStore) ListClients(ctx context.Context) ([]*OIDCClient, error) {
+func (s *SQLStore) ListClients(ctx context.Context) ([]*OIDCClient, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT `+clientSelectCols+` FROM oidc_clients ORDER BY created_at DESC`)
 	if err != nil {
@@ -715,12 +729,12 @@ func (s *SQLiteStore) ListClients(ctx context.Context) ([]*OIDCClient, error) {
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteClient(ctx context.Context, clientID string) error {
+func (s *SQLStore) DeleteClient(ctx context.Context, clientID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM oidc_clients WHERE client_id=?`, clientID)
 	return err
 }
 
-func (s *SQLiteStore) scanClient(row *sql.Row) (*OIDCClient, error) {
+func (s *SQLStore) scanClient(row *sql.Row) (*OIDCClient, error) {
 	var c OIDCClient
 	var redirectURIs, grantTypes, responseTypes, postLogoutURIs string
 	if err := row.Scan(&c.ClientID, &c.ClientSecretHash, &c.ClientName, &redirectURIs,
@@ -735,7 +749,7 @@ func (s *SQLiteStore) scanClient(row *sql.Row) (*OIDCClient, error) {
 	return &c, nil
 }
 
-func (s *SQLiteStore) scanClientRow(rows *sql.Rows) (*OIDCClient, error) {
+func (s *SQLStore) scanClientRow(rows *sql.Rows) (*OIDCClient, error) {
 	var c OIDCClient
 	var redirectURIs, grantTypes, responseTypes, postLogoutURIs string
 	if err := rows.Scan(&c.ClientID, &c.ClientSecretHash, &c.ClientName, &redirectURIs,
@@ -752,7 +766,7 @@ func (s *SQLiteStore) scanClientRow(rows *sql.Rows) (*OIDCClient, error) {
 
 // --- Refresh Tokens ---
 
-func (s *SQLiteStore) SaveRefreshToken(ctx context.Context, t *RefreshToken) error {
+func (s *SQLStore) SaveRefreshToken(ctx context.Context, t *RefreshToken) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO refresh_tokens (hash, family_id, subject_did, client_id, scope, issued_at, expires_at, used_at)
 		VALUES (?,?,?,?,?,?,?,?)
@@ -761,7 +775,7 @@ func (s *SQLiteStore) SaveRefreshToken(ctx context.Context, t *RefreshToken) err
 	return err
 }
 
-func (s *SQLiteStore) GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error) {
+func (s *SQLStore) GetRefreshToken(ctx context.Context, hash string) (*RefreshToken, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT hash, family_id, subject_did, client_id, scope, issued_at, expires_at, used_at FROM refresh_tokens WHERE hash=?`, hash)
 	var t RefreshToken
 	var usedAt sql.NullTime
@@ -774,12 +788,12 @@ func (s *SQLiteStore) GetRefreshToken(ctx context.Context, hash string) (*Refres
 	return &t, nil
 }
 
-func (s *SQLiteStore) DeleteRefreshToken(ctx context.Context, hash string) error {
+func (s *SQLStore) DeleteRefreshToken(ctx context.Context, hash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM refresh_tokens WHERE hash=?`, hash)
 	return err
 }
 
-func (s *SQLiteStore) MarkRefreshTokenUsed(ctx context.Context, hash string, at time.Time) (bool, error) {
+func (s *SQLStore) MarkRefreshTokenUsed(ctx context.Context, hash string, at time.Time) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `UPDATE refresh_tokens SET used_at=? WHERE hash=? AND used_at IS NULL`, at.UTC(), hash)
 	if err != nil {
 		return false, err
@@ -791,7 +805,7 @@ func (s *SQLiteStore) MarkRefreshTokenUsed(ctx context.Context, hash string, at 
 	return n == 1, nil
 }
 
-func (s *SQLiteStore) DeleteRefreshTokenFamily(ctx context.Context, familyID string) error {
+func (s *SQLStore) DeleteRefreshTokenFamily(ctx context.Context, familyID string) error {
 	if familyID == "" {
 		return nil
 	}
@@ -799,12 +813,16 @@ func (s *SQLiteStore) DeleteRefreshTokenFamily(ctx context.Context, familyID str
 	return err
 }
 
-func (s *SQLiteStore) TakeSessionByCode(ctx context.Context, code string) (*OIDCSession, error) {
+func (s *SQLStore) TakeSessionByCode(ctx context.Context, code string) (*OIDCSession, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	// A code is redeemed once: concurrent redemptions queue here, and the loser finds no session.
+	if err := tx.lock(ctx, "oidc_session_code:"+code); err != nil {
+		return nil, err
+	}
 
 	sess, err := s.scanSession(tx.QueryRowContext(ctx, `SELECT `+sessionCols+` FROM oidc_sessions WHERE code=?`, code))
 	if err != nil {
@@ -825,7 +843,7 @@ func (s *SQLiteStore) TakeSessionByCode(ctx context.Context, code string) (*OIDC
 
 // --- External Provider Links ---
 
-func (s *SQLiteStore) SaveExternalLink(ctx context.Context, l *ExternalProviderLink) error {
+func (s *SQLStore) SaveExternalLink(ctx context.Context, l *ExternalProviderLink) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO external_provider_links (subject_did, provider, external_id, linked_at, last_used_at)
 		VALUES (?,?,?,?,?)
@@ -836,7 +854,7 @@ func (s *SQLiteStore) SaveExternalLink(ctx context.Context, l *ExternalProviderL
 	return err
 }
 
-func (s *SQLiteStore) GetExternalLink(ctx context.Context, provider, externalID string) (*ExternalProviderLink, error) {
+func (s *SQLStore) GetExternalLink(ctx context.Context, provider, externalID string) (*ExternalProviderLink, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT subject_did, provider, external_id, linked_at, last_used_at FROM external_provider_links WHERE provider=? AND external_id=?`, provider, externalID)
 	var l ExternalProviderLink
 	if err := row.Scan(&l.SubjectDID, &l.Provider, &l.ExternalID, &l.LinkedAt, &l.LastUsedAt); err != nil {
@@ -848,7 +866,7 @@ func (s *SQLiteStore) GetExternalLink(ctx context.Context, provider, externalID 
 	return &l, nil
 }
 
-func (s *SQLiteStore) ListExternalLinks(ctx context.Context, subjectDID string) ([]*ExternalProviderLink, error) {
+func (s *SQLStore) ListExternalLinks(ctx context.Context, subjectDID string) ([]*ExternalProviderLink, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT subject_did, provider, external_id, linked_at, last_used_at FROM external_provider_links WHERE subject_did=? ORDER BY linked_at DESC`, subjectDID)
 	if err != nil {
 		return nil, err
@@ -865,20 +883,20 @@ func (s *SQLiteStore) ListExternalLinks(ctx context.Context, subjectDID string) 
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteExternalLink(ctx context.Context, provider, externalID string) error {
+func (s *SQLStore) DeleteExternalLink(ctx context.Context, provider, externalID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM external_provider_links WHERE provider=? AND external_id=?`, provider, externalID)
 	return err
 }
 
 // --- Magic Link Tokens ---
 
-func (s *SQLiteStore) SaveMagicLinkToken(ctx context.Context, t *MagicLinkToken) error {
+func (s *SQLStore) SaveMagicLinkToken(ctx context.Context, t *MagicLinkToken) error {
 	_, err := s.db.ExecContext(ctx, `INSERT INTO magic_link_tokens (hash, email, expires_at, created_at) VALUES (?,?,?,?)`,
 		t.Hash, t.Email, t.ExpiresAt, t.CreatedAt)
 	return err
 }
 
-func (s *SQLiteStore) GetMagicLinkToken(ctx context.Context, hash string) (*MagicLinkToken, error) {
+func (s *SQLStore) GetMagicLinkToken(ctx context.Context, hash string) (*MagicLinkToken, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT hash, email, expires_at, created_at FROM magic_link_tokens WHERE hash=?`, hash)
 	var t MagicLinkToken
 	if err := row.Scan(&t.Hash, &t.Email, &t.ExpiresAt, &t.CreatedAt); err != nil {
@@ -887,14 +905,14 @@ func (s *SQLiteStore) GetMagicLinkToken(ctx context.Context, hash string) (*Magi
 	return &t, nil
 }
 
-func (s *SQLiteStore) DeleteMagicLinkToken(ctx context.Context, hash string) error {
+func (s *SQLStore) DeleteMagicLinkToken(ctx context.Context, hash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM magic_link_tokens WHERE hash=?`, hash)
 	return err
 }
 
 // --- WebAuthn Credentials ---
 
-func (s *SQLiteStore) SaveWebAuthnCredential(ctx context.Context, c *WebAuthnCredential) error {
+func (s *SQLStore) SaveWebAuthnCredential(ctx context.Context, c *WebAuthnCredential) error {
 	transports, _ := json.Marshal(c.Transports)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO webauthn_credentials (credential_id, subject_did, public_key_cbor, attestation_type, aaguid, sign_count, name, transports, created_at, last_used_at)
@@ -905,12 +923,12 @@ func (s *SQLiteStore) SaveWebAuthnCredential(ctx context.Context, c *WebAuthnCre
 	return err
 }
 
-func (s *SQLiteStore) GetWebAuthnCredential(ctx context.Context, credentialID string) (*WebAuthnCredential, error) {
+func (s *SQLStore) GetWebAuthnCredential(ctx context.Context, credentialID string) (*WebAuthnCredential, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT credential_id, subject_did, public_key_cbor, attestation_type, aaguid, sign_count, name, transports, created_at, last_used_at FROM webauthn_credentials WHERE credential_id=?`, credentialID)
 	return s.scanWebAuthnCredential(row)
 }
 
-func (s *SQLiteStore) ListWebAuthnCredentials(ctx context.Context, subjectDID string) ([]*WebAuthnCredential, error) {
+func (s *SQLStore) ListWebAuthnCredentials(ctx context.Context, subjectDID string) ([]*WebAuthnCredential, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT credential_id, subject_did, public_key_cbor, attestation_type, aaguid, sign_count, name, transports, created_at, last_used_at FROM webauthn_credentials WHERE subject_did=? ORDER BY created_at DESC`, subjectDID)
 	if err != nil {
 		return nil, err
@@ -927,18 +945,18 @@ func (s *SQLiteStore) ListWebAuthnCredentials(ctx context.Context, subjectDID st
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) UpdateWebAuthnCredential(ctx context.Context, c *WebAuthnCredential) error {
+func (s *SQLStore) UpdateWebAuthnCredential(ctx context.Context, c *WebAuthnCredential) error {
 	_, err := s.db.ExecContext(ctx, `UPDATE webauthn_credentials SET sign_count=?, last_used_at=?, name=? WHERE credential_id=?`,
 		c.SignCount, c.LastUsedAt, c.Name, c.CredentialID)
 	return err
 }
 
-func (s *SQLiteStore) DeleteWebAuthnCredential(ctx context.Context, credentialID string) error {
+func (s *SQLStore) DeleteWebAuthnCredential(ctx context.Context, credentialID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM webauthn_credentials WHERE credential_id=?`, credentialID)
 	return err
 }
 
-func (s *SQLiteStore) scanWebAuthnCredential(row *sql.Row) (*WebAuthnCredential, error) {
+func (s *SQLStore) scanWebAuthnCredential(row *sql.Row) (*WebAuthnCredential, error) {
 	var c WebAuthnCredential
 	var transports string
 	var lastUsedAt sql.NullTime
@@ -955,7 +973,7 @@ func (s *SQLiteStore) scanWebAuthnCredential(row *sql.Row) (*WebAuthnCredential,
 	return &c, nil
 }
 
-func (s *SQLiteStore) scanWebAuthnRow(rows *sql.Rows) (*WebAuthnCredential, error) {
+func (s *SQLStore) scanWebAuthnRow(rows *sql.Rows) (*WebAuthnCredential, error) {
 	var c WebAuthnCredential
 	var transports string
 	var lastUsedAt sql.NullTime
@@ -976,7 +994,7 @@ func (s *SQLiteStore) scanWebAuthnRow(rows *sql.Rows) (*WebAuthnCredential, erro
 
 // SaveTOTPCredential stores a new (pending) factor. A new secret always starts unverified
 // and with no replay history.
-func (s *SQLiteStore) SaveTOTPCredential(ctx context.Context, c *TOTPCredential) error {
+func (s *SQLStore) SaveTOTPCredential(ctx context.Context, c *TOTPCredential) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO totp_credentials (subject_did, encrypted_secret, account_name, created_at, verified_at, last_step)
 		VALUES (?,?,?,?,NULL,0)
@@ -986,7 +1004,7 @@ func (s *SQLiteStore) SaveTOTPCredential(ctx context.Context, c *TOTPCredential)
 	return err
 }
 
-func (s *SQLiteStore) GetTOTPCredential(ctx context.Context, subjectDID string) (*TOTPCredential, error) {
+func (s *SQLStore) GetTOTPCredential(ctx context.Context, subjectDID string) (*TOTPCredential, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT subject_did, encrypted_secret, account_name, created_at, verified_at, last_step FROM totp_credentials WHERE subject_did=?`, subjectDID)
 	var c TOTPCredential
 	var verifiedAt sql.NullTime
@@ -1002,7 +1020,7 @@ func (s *SQLiteStore) GetTOTPCredential(ctx context.Context, subjectDID string) 
 // ConsumeTOTPStep records that time step was used. It succeeds only for a step newer than
 // the last one used, which stops a code from being replayed inside its validity window. The
 // first success also marks the factor verified.
-func (s *SQLiteStore) ConsumeTOTPStep(ctx context.Context, subjectDID string, step int64) (bool, error) {
+func (s *SQLStore) ConsumeTOTPStep(ctx context.Context, subjectDID string, step int64) (bool, error) {
 	res, err := s.db.ExecContext(ctx, `
 		UPDATE totp_credentials
 		SET last_step=?, verified_at=COALESCE(verified_at, ?)
@@ -1015,14 +1033,14 @@ func (s *SQLiteStore) ConsumeTOTPStep(ctx context.Context, subjectDID string, st
 	return n == 1, err
 }
 
-func (s *SQLiteStore) DeleteTOTPCredential(ctx context.Context, subjectDID string) error {
+func (s *SQLStore) DeleteTOTPCredential(ctx context.Context, subjectDID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM totp_credentials WHERE subject_did=?`, subjectDID)
 	return err
 }
 
 // --- Webhook Subscriptions ---
 
-func (s *SQLiteStore) SaveWebhookSubscription(ctx context.Context, sub *WebhookSubscription) error {
+func (s *SQLStore) SaveWebhookSubscription(ctx context.Context, sub *WebhookSubscription) error {
 	eventTypes, _ := json.Marshal(sub.EventTypes)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO webhook_subscriptions (id, url, event_types, signing_secret, tenant_id, created_at)
@@ -1032,12 +1050,12 @@ func (s *SQLiteStore) SaveWebhookSubscription(ctx context.Context, sub *WebhookS
 	return err
 }
 
-func (s *SQLiteStore) GetWebhookSubscription(ctx context.Context, id string) (*WebhookSubscription, error) {
+func (s *SQLStore) GetWebhookSubscription(ctx context.Context, id string) (*WebhookSubscription, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT id, url, event_types, signing_secret, tenant_id, created_at FROM webhook_subscriptions WHERE id=?`, id)
 	return s.scanWebhookSub(row)
 }
 
-func (s *SQLiteStore) ListWebhookSubscriptions(ctx context.Context, eventType string) ([]*WebhookSubscription, error) {
+func (s *SQLStore) ListWebhookSubscriptions(ctx context.Context, eventType string) ([]*WebhookSubscription, error) {
 	rows, err := s.db.QueryContext(ctx, `SELECT id, url, event_types, signing_secret, tenant_id, created_at FROM webhook_subscriptions`)
 	if err != nil {
 		return nil, err
@@ -1065,12 +1083,12 @@ func (s *SQLiteStore) ListWebhookSubscriptions(ctx context.Context, eventType st
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) DeleteWebhookSubscription(ctx context.Context, id string) error {
+func (s *SQLStore) DeleteWebhookSubscription(ctx context.Context, id string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM webhook_subscriptions WHERE id=?`, id)
 	return err
 }
 
-func (s *SQLiteStore) scanWebhookSub(row *sql.Row) (*WebhookSubscription, error) {
+func (s *SQLStore) scanWebhookSub(row *sql.Row) (*WebhookSubscription, error) {
 	var sub WebhookSubscription
 	var eventTypes string
 	if err := row.Scan(&sub.ID, &sub.URL, &eventTypes, &sub.SigningSecret, &sub.TenantID, &sub.CreatedAt); err != nil {
@@ -1082,7 +1100,7 @@ func (s *SQLiteStore) scanWebhookSub(row *sql.Row) (*WebhookSubscription, error)
 	return &sub, nil
 }
 
-func (s *SQLiteStore) scanWebhookSubRow(rows *sql.Rows) (*WebhookSubscription, error) {
+func (s *SQLStore) scanWebhookSubRow(rows *sql.Rows) (*WebhookSubscription, error) {
 	var sub WebhookSubscription
 	var eventTypes string
 	if err := rows.Scan(&sub.ID, &sub.URL, &eventTypes, &sub.SigningSecret, &sub.TenantID, &sub.CreatedAt); err != nil {
@@ -1118,12 +1136,15 @@ const authFailureDecay = 24 * time.Hour
 
 // RecordAuthFailure increments the failure counter for subjectOrEmail and sets the lockout window.
 // The read and the write run in one transaction, so concurrent failures are all counted.
-func (s *SQLiteStore) RecordAuthFailure(ctx context.Context, subjectOrEmail string) error {
+func (s *SQLStore) RecordAuthFailure(ctx context.Context, subjectOrEmail string) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := tx.lock(ctx, "auth_failures:"+subjectOrEmail); err != nil {
+		return err
+	}
 
 	now := time.Now()
 	var count int
@@ -1165,7 +1186,7 @@ func (s *SQLiteStore) RecordAuthFailure(ctx context.Context, subjectOrEmail stri
 	return tx.Commit()
 }
 
-func (s *SQLiteStore) GetAuthFailures(ctx context.Context, subjectOrEmail string) (int, *time.Time, error) {
+func (s *SQLStore) GetAuthFailures(ctx context.Context, subjectOrEmail string) (int, *time.Time, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT count, locked_until FROM auth_failures WHERE subject_or_email=?`, subjectOrEmail)
 	var count int
 	var lockedUntil sql.NullTime
@@ -1182,14 +1203,14 @@ func (s *SQLiteStore) GetAuthFailures(ctx context.Context, subjectOrEmail string
 	return count, lu, nil
 }
 
-func (s *SQLiteStore) ClearAuthFailures(ctx context.Context, subjectOrEmail string) error {
+func (s *SQLStore) ClearAuthFailures(ctx context.Context, subjectOrEmail string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM auth_failures WHERE subject_or_email=?`, subjectOrEmail)
 	return err
 }
 
 // --- Duress Configs ---
 
-func (s *SQLiteStore) SaveDuressConfig(ctx context.Context, subjectDID, hash string) error {
+func (s *SQLStore) SaveDuressConfig(ctx context.Context, subjectDID, hash string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO duress_configs (subject_did, hash) VALUES (?,?)
 		 ON CONFLICT(subject_did) DO UPDATE SET hash=excluded.hash, created_at=CURRENT_TIMESTAMP`,
@@ -1197,7 +1218,7 @@ func (s *SQLiteStore) SaveDuressConfig(ctx context.Context, subjectDID, hash str
 	return err
 }
 
-func (s *SQLiteStore) GetDuressHash(ctx context.Context, subjectDID string) (string, error) {
+func (s *SQLStore) GetDuressHash(ctx context.Context, subjectDID string) (string, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT hash FROM duress_configs WHERE subject_did=?`, subjectDID)
 	var hash string
 	if err := row.Scan(&hash); err != nil {
@@ -1206,14 +1227,14 @@ func (s *SQLiteStore) GetDuressHash(ctx context.Context, subjectDID string) (str
 	return hash, nil
 }
 
-func (s *SQLiteStore) DeleteDuressConfig(ctx context.Context, subjectDID string) error {
+func (s *SQLStore) DeleteDuressConfig(ctx context.Context, subjectDID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM duress_configs WHERE subject_did=?`, subjectDID)
 	return err
 }
 
 // --- Consent Expiry ---
 
-func (s *SQLiteStore) ListExpiringGrants(ctx context.Context, within time.Duration) ([]*consent.Grant, error) {
+func (s *SQLStore) ListExpiringGrants(ctx context.Context, within time.Duration) ([]*consent.Grant, error) {
 	cutoff := time.Now().Add(within)
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT id, subject_did, relying_did, level, scope_id, granted_at, expires_at, explicitly_confirmed
@@ -1240,14 +1261,18 @@ func (s *SQLiteStore) ListExpiringGrants(ctx context.Context, within time.Durati
 
 // --- Verifiable Audit Log ---
 
-func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, eventType, payload string) (*AuditEvent, error) {
+func (s *SQLStore) AppendAuditEvent(ctx context.Context, eventType, payload string) (*AuditEvent, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	// The head is read in the same transaction that writes the new row.
+	// The head is read in the same transaction that writes the new row. Under PostgreSQL the lock
+	// stops a second append from reading the same head and forking the chain.
+	if err := tx.lock(ctx, "audit_log"); err != nil {
+		return nil, fmt.Errorf("audit: lock chain: %w", err)
+	}
 	prevHash := ""
 	var head string
 	switch err := tx.QueryRowContext(ctx, `SELECT hash FROM audit_log ORDER BY seq DESC LIMIT 1`).Scan(&head); {
@@ -1262,16 +1287,15 @@ func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, eventType, payload s
 	raw, _ := json.Marshal(map[string]string{"event_type": eventType, "payload": payload, "prev_hash": prevHash})
 	sum := sha256.Sum256(append([]byte(prevHash), raw...))
 	hash := hex.EncodeToString(sum[:])
-	res, err := tx.ExecContext(ctx,
-		`INSERT INTO audit_log (event_type, payload, hash, prev_hash) VALUES (?,?,?,?)`,
-		eventType, payload, hash, prevHash)
-	if err != nil {
+	var id int64
+	if err := tx.QueryRowContext(ctx,
+		`INSERT INTO audit_log (event_type, payload, hash, prev_hash) VALUES (?,?,?,?) RETURNING seq`,
+		eventType, payload, hash, prevHash).Scan(&id); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("audit: commit: %w", err)
 	}
-	id, _ := res.LastInsertId()
 	return &AuditEvent{
 		Seq:       id,
 		Timestamp: time.Now(),
@@ -1282,13 +1306,13 @@ func (s *SQLiteStore) AppendAuditEvent(ctx context.Context, eventType, payload s
 	}, nil
 }
 
-func (s *SQLiteStore) GetAuditHead(ctx context.Context) (*AuditEvent, error) {
+func (s *SQLStore) GetAuditHead(ctx context.Context) (*AuditEvent, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT seq, timestamp, event_type, payload, hash, prev_hash FROM audit_log ORDER BY seq DESC LIMIT 1`)
 	return scanAuditRow(row)
 }
 
-func (s *SQLiteStore) ListAuditEvents(ctx context.Context, limit, offset int) ([]*AuditEvent, int, error) {
+func (s *SQLStore) ListAuditEvents(ctx context.Context, limit, offset int) ([]*AuditEvent, int, error) {
 	var total int
 	if err := s.db.QueryRowContext(ctx, `SELECT COUNT(*) FROM audit_log`).Scan(&total); err != nil {
 		return nil, 0, err
@@ -1321,7 +1345,7 @@ func scanAuditRow(row *sql.Row) (*AuditEvent, error) {
 
 // --- Guardian Recovery ---
 
-func (s *SQLiteStore) SaveRecoveryConfig(ctx context.Context, cfg *RecoveryConfig) error {
+func (s *SQLStore) SaveRecoveryConfig(ctx context.Context, cfg *RecoveryConfig) error {
 	gdids, _ := json.Marshal(cfg.GuardianDIDs)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO recovery_configs (subject_did, threshold, guardian_dids) VALUES (?,?,?)
@@ -1330,7 +1354,7 @@ func (s *SQLiteStore) SaveRecoveryConfig(ctx context.Context, cfg *RecoveryConfi
 	return err
 }
 
-func (s *SQLiteStore) GetRecoveryConfig(ctx context.Context, subjectDID string) (*RecoveryConfig, error) {
+func (s *SQLStore) GetRecoveryConfig(ctx context.Context, subjectDID string) (*RecoveryConfig, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT subject_did, threshold, guardian_dids, created_at FROM recovery_configs WHERE subject_did=?`, subjectDID)
 	var cfg RecoveryConfig
@@ -1344,19 +1368,19 @@ func (s *SQLiteStore) GetRecoveryConfig(ctx context.Context, subjectDID string) 
 	return &cfg, nil
 }
 
-func (s *SQLiteStore) DeleteRecoveryConfig(ctx context.Context, subjectDID string) error {
+func (s *SQLStore) DeleteRecoveryConfig(ctx context.Context, subjectDID string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM recovery_configs WHERE subject_did=?`, subjectDID)
 	return err
 }
 
-func (s *SQLiteStore) SaveRecoveryRequest(ctx context.Context, req *RecoveryRequest) error {
+func (s *SQLStore) SaveRecoveryRequest(ctx context.Context, req *RecoveryRequest) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO recovery_requests (id, subject_did, shares_collected, completed, commitment) VALUES (?,?,?,?,?)`,
 		req.ID, req.SubjectDID, req.SharesCollected, boolToInt(req.Completed), req.Commitment)
 	return err
 }
 
-func (s *SQLiteStore) GetRecoveryRequest(ctx context.Context, id string) (*RecoveryRequest, error) {
+func (s *SQLStore) GetRecoveryRequest(ctx context.Context, id string) (*RecoveryRequest, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, subject_did, started_at, shares_collected, completed, commitment FROM recovery_requests WHERE id=?`, id)
 	var req RecoveryRequest
@@ -1368,14 +1392,14 @@ func (s *SQLiteStore) GetRecoveryRequest(ctx context.Context, id string) (*Recov
 	return &req, nil
 }
 
-func (s *SQLiteStore) UpdateRecoveryRequest(ctx context.Context, req *RecoveryRequest) error {
+func (s *SQLStore) UpdateRecoveryRequest(ctx context.Context, req *RecoveryRequest) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE recovery_requests SET shares_collected=?, completed=? WHERE id=?`,
 		req.SharesCollected, boolToInt(req.Completed), req.ID)
 	return err
 }
 
-func (s *SQLiteStore) SaveRecoveryShare(ctx context.Context, share *RecoveryShare) error {
+func (s *SQLStore) SaveRecoveryShare(ctx context.Context, share *RecoveryShare) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO recovery_shares (request_id, guardian_did, share_hash) VALUES (?,?,?)
 		 ON CONFLICT(request_id, guardian_did) DO NOTHING`,
@@ -1383,7 +1407,7 @@ func (s *SQLiteStore) SaveRecoveryShare(ctx context.Context, share *RecoveryShar
 	return err
 }
 
-func (s *SQLiteStore) ListRecoveryShares(ctx context.Context, requestID string) ([]*RecoveryShare, error) {
+func (s *SQLStore) ListRecoveryShares(ctx context.Context, requestID string) ([]*RecoveryShare, error) {
 	rows, err := s.db.QueryContext(ctx,
 		`SELECT request_id, guardian_did, share_hash, collected_at FROM recovery_shares WHERE request_id=?`, requestID)
 	if err != nil {
@@ -1410,7 +1434,7 @@ func boolToInt(b bool) int {
 
 // --- Password Credentials ---
 
-func (s *SQLiteStore) SavePasswordHash(ctx context.Context, identifier, hash string) error {
+func (s *SQLStore) SavePasswordHash(ctx context.Context, identifier, hash string) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO passwords (identifier, hash) VALUES (?,?)
 		 ON CONFLICT(identifier) DO UPDATE SET hash=excluded.hash, created_at=CURRENT_TIMESTAMP`,
@@ -1418,7 +1442,7 @@ func (s *SQLiteStore) SavePasswordHash(ctx context.Context, identifier, hash str
 	return err
 }
 
-func (s *SQLiteStore) GetPasswordHash(ctx context.Context, identifier string) (string, error) {
+func (s *SQLStore) GetPasswordHash(ctx context.Context, identifier string) (string, error) {
 	row := s.db.QueryRowContext(ctx, `SELECT hash FROM passwords WHERE identifier=?`, identifier)
 	var hash string
 	if err := row.Scan(&hash); err != nil {
@@ -1427,7 +1451,7 @@ func (s *SQLiteStore) GetPasswordHash(ctx context.Context, identifier string) (s
 	return hash, nil
 }
 
-func (s *SQLiteStore) DeletePasswordHash(ctx context.Context, identifier string) error {
+func (s *SQLStore) DeletePasswordHash(ctx context.Context, identifier string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM passwords WHERE identifier=?`, identifier)
 	return err
 }
@@ -1452,14 +1476,14 @@ func scanCredentials(rows *sql.Rows) ([]*vc.VerifiableCredential, error) {
 
 // --- Pushed Authorization Requests (RFC 9126) ---
 
-func (s *SQLiteStore) SavePARRequest(ctx context.Context, req *PARRequest) error {
+func (s *SQLStore) SavePARRequest(ctx context.Context, req *PARRequest) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO par_requests (request_uri, client_id, params, expires_at, created_at) VALUES (?,?,?,?,?)`,
 		req.RequestURI, req.ClientID, req.Params, req.ExpiresAt, req.CreatedAt)
 	return err
 }
 
-func (s *SQLiteStore) GetPARRequest(ctx context.Context, requestURI string) (*PARRequest, error) {
+func (s *SQLStore) GetPARRequest(ctx context.Context, requestURI string) (*PARRequest, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT request_uri, client_id, params, expires_at, created_at FROM par_requests WHERE request_uri=?`, requestURI)
 	var r PARRequest
@@ -1469,14 +1493,14 @@ func (s *SQLiteStore) GetPARRequest(ctx context.Context, requestURI string) (*PA
 	return &r, nil
 }
 
-func (s *SQLiteStore) DeletePARRequest(ctx context.Context, requestURI string) error {
+func (s *SQLStore) DeletePARRequest(ctx context.Context, requestURI string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM par_requests WHERE request_uri=?`, requestURI)
 	return err
 }
 
 // --- Device Authorization Grant (RFC 8628) ---
 
-func (s *SQLiteStore) SaveDeviceCode(ctx context.Context, dc *DeviceCode) error {
+func (s *SQLStore) SaveDeviceCode(ctx context.Context, dc *DeviceCode) error {
 	approved, denied := boolToInt(dc.Approved), boolToInt(dc.Denied)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO device_codes (device_code, user_code, client_id, scope, subject_did, approved, denied, expires_at, interval_secs, created_at)
@@ -1487,28 +1511,28 @@ func (s *SQLiteStore) SaveDeviceCode(ctx context.Context, dc *DeviceCode) error 
 	return err
 }
 
-func (s *SQLiteStore) GetDeviceCode(ctx context.Context, deviceCode string) (*DeviceCode, error) {
+func (s *SQLStore) GetDeviceCode(ctx context.Context, deviceCode string) (*DeviceCode, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT device_code, user_code, client_id, scope, subject_did, approved, denied, expires_at, interval_secs, created_at
 		 FROM device_codes WHERE device_code=?`, deviceCode)
 	return scanDeviceCode(row)
 }
 
-func (s *SQLiteStore) GetDeviceCodeByUserCode(ctx context.Context, userCode string) (*DeviceCode, error) {
+func (s *SQLStore) GetDeviceCodeByUserCode(ctx context.Context, userCode string) (*DeviceCode, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT device_code, user_code, client_id, scope, subject_did, approved, denied, expires_at, interval_secs, created_at
 		 FROM device_codes WHERE user_code=?`, userCode)
 	return scanDeviceCode(row)
 }
 
-func (s *SQLiteStore) UpdateDeviceCode(ctx context.Context, dc *DeviceCode) error {
+func (s *SQLStore) UpdateDeviceCode(ctx context.Context, dc *DeviceCode) error {
 	_, err := s.db.ExecContext(ctx,
 		`UPDATE device_codes SET subject_did=?, approved=?, denied=? WHERE device_code=?`,
 		dc.SubjectDID, boolToInt(dc.Approved), boolToInt(dc.Denied), dc.DeviceCode)
 	return err
 }
 
-func (s *SQLiteStore) RevokeAccessToken(ctx context.Context, hash string, expiresAt time.Time) error {
+func (s *SQLStore) RevokeAccessToken(ctx context.Context, hash string, expiresAt time.Time) error {
 	// Entries past their expiry can never match a valid token; drop them as we go.
 	_, _ = s.db.ExecContext(ctx, `DELETE FROM revoked_access_tokens WHERE expires_at < ?`, time.Now().UTC())
 	_, err := s.db.ExecContext(ctx,
@@ -1518,7 +1542,7 @@ func (s *SQLiteStore) RevokeAccessToken(ctx context.Context, hash string, expire
 	return err
 }
 
-func (s *SQLiteStore) IsAccessTokenRevoked(ctx context.Context, hash string) (bool, error) {
+func (s *SQLStore) IsAccessTokenRevoked(ctx context.Context, hash string) (bool, error) {
 	var n int
 	err := s.db.QueryRowContext(ctx,
 		`SELECT COUNT(1) FROM revoked_access_tokens WHERE hash=? AND expires_at > ?`,
@@ -1526,7 +1550,7 @@ func (s *SQLiteStore) IsAccessTokenRevoked(ctx context.Context, hash string) (bo
 	return n > 0, err
 }
 
-func (s *SQLiteStore) DeleteDeviceCode(ctx context.Context, deviceCode string) error {
+func (s *SQLStore) DeleteDeviceCode(ctx context.Context, deviceCode string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM device_codes WHERE device_code=?`, deviceCode)
 	return err
 }
@@ -1547,14 +1571,14 @@ func scanDeviceCode(row *sql.Row) (*DeviceCode, error) {
 
 // --- Password Reset Tokens ---
 
-func (s *SQLiteStore) SavePasswordResetToken(ctx context.Context, t *PasswordResetToken) error {
+func (s *SQLStore) SavePasswordResetToken(ctx context.Context, t *PasswordResetToken) error {
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO password_reset_tokens (hash, identifier, expires_at, created_at) VALUES (?,?,?,?)`,
 		t.Hash, t.Identifier, t.ExpiresAt, t.CreatedAt)
 	return err
 }
 
-func (s *SQLiteStore) GetPasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error) {
+func (s *SQLStore) GetPasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT hash, identifier, expires_at, created_at FROM password_reset_tokens WHERE hash=?`, hash)
 	var t PasswordResetToken
@@ -1564,17 +1588,20 @@ func (s *SQLiteStore) GetPasswordResetToken(ctx context.Context, hash string) (*
 	return &t, nil
 }
 
-func (s *SQLiteStore) DeletePasswordResetToken(ctx context.Context, hash string) error {
+func (s *SQLStore) DeletePasswordResetToken(ctx context.Context, hash string) error {
 	_, err := s.db.ExecContext(ctx, `DELETE FROM password_reset_tokens WHERE hash=?`, hash)
 	return err
 }
 
-func (s *SQLiteStore) ConsumePasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error) {
+func (s *SQLStore) ConsumePasswordResetToken(ctx context.Context, hash string) (*PasswordResetToken, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer tx.Rollback()
+	if err := tx.lock(ctx, "password_reset:"+hash); err != nil {
+		return nil, err
+	}
 
 	var t PasswordResetToken
 	err = tx.QueryRowContext(ctx,
@@ -1598,7 +1625,7 @@ func (s *SQLiteStore) ConsumePasswordResetToken(ctx context.Context, hash string
 
 // --- Privacy Budget ---
 
-func (s *SQLiteStore) RecordDisclosure(ctx context.Context, d *PrivacyDisclosure) error {
+func (s *SQLStore) RecordDisclosure(ctx context.Context, d *PrivacyDisclosure) error {
 	fields, _ := json.Marshal(d.FieldNames)
 	_, err := s.db.ExecContext(ctx,
 		`INSERT INTO privacy_disclosures (id, subject_did, schema_id, verifier_did, field_names, disclosed_at)
@@ -1607,7 +1634,7 @@ func (s *SQLiteStore) RecordDisclosure(ctx context.Context, d *PrivacyDisclosure
 	return err
 }
 
-func (s *SQLiteStore) ListDisclosures(ctx context.Context, subjectDID, schemaID string) ([]*PrivacyDisclosure, error) {
+func (s *SQLStore) ListDisclosures(ctx context.Context, subjectDID, schemaID string) ([]*PrivacyDisclosure, error) {
 	q := `SELECT id, subject_did, schema_id, verifier_did, field_names, disclosed_at FROM privacy_disclosures WHERE subject_did=?`
 	args := []any{subjectDID}
 	if schemaID != "" {
@@ -1633,7 +1660,7 @@ func (s *SQLiteStore) ListDisclosures(ctx context.Context, subjectDID, schemaID 
 	return out, rows.Err()
 }
 
-func (s *SQLiteStore) CountDisclosures(ctx context.Context, subjectDID, schemaID string) (int, error) {
+func (s *SQLStore) CountDisclosures(ctx context.Context, subjectDID, schemaID string) (int, error) {
 	q := `SELECT COUNT(*) FROM privacy_disclosures WHERE subject_did=?`
 	args := []any{subjectDID}
 	if schemaID != "" {
@@ -1647,7 +1674,7 @@ func (s *SQLiteStore) CountDisclosures(ctx context.Context, subjectDID, schemaID
 
 // --- OID4VCI Credential Offers ---
 
-func (s *SQLiteStore) SaveCredentialOffer(ctx context.Context, offer *CredentialOffer) error {
+func (s *SQLStore) SaveCredentialOffer(ctx context.Context, offer *CredentialOffer) error {
 	schemas, _ := json.Marshal(offer.SchemaIDs)
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO credential_offers (id, client_id, schema_ids, issuer_did, subject_did, expires_at, used, created_at, tx_code_hash)
@@ -1657,7 +1684,7 @@ func (s *SQLiteStore) SaveCredentialOffer(ctx context.Context, offer *Credential
 	return err
 }
 
-func (s *SQLiteStore) GetCredentialOffer(ctx context.Context, id string) (*CredentialOffer, error) {
+func (s *SQLStore) GetCredentialOffer(ctx context.Context, id string) (*CredentialOffer, error) {
 	row := s.db.QueryRowContext(ctx,
 		`SELECT id, client_id, schema_ids, issuer_did, subject_did, expires_at, used, created_at, tx_code_hash
 		 FROM credential_offers WHERE id=?`, id)
@@ -1677,7 +1704,7 @@ func (s *SQLiteStore) GetCredentialOffer(ctx context.Context, id string) (*Crede
 
 // MarkCredentialOfferUsed claims an offer. The update applies only while the offer is unused, so two
 // redemptions cannot both succeed; the loser gets ErrOfferUsed.
-func (s *SQLiteStore) MarkCredentialOfferUsed(ctx context.Context, id string) error {
+func (s *SQLStore) MarkCredentialOfferUsed(ctx context.Context, id string) error {
 	res, err := s.db.ExecContext(ctx, `UPDATE credential_offers SET used=1 WHERE id=? AND used=0`, id)
 	if err != nil {
 		return err

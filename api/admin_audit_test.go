@@ -2,6 +2,7 @@ package api_test
 
 import (
 	"context"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -20,11 +21,7 @@ import (
 // An admin action is written to the verifiable audit log, not only to the request log.
 func TestAdminSuspendIsAudited(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	logger := slog.Default()
 	bus := events.NewBus(st, logger)

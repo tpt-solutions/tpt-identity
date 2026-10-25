@@ -3,6 +3,7 @@ package bridge_test
 import (
 	"context"
 	"errors"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"sync"
 	"testing"
 
@@ -12,11 +13,7 @@ import (
 
 func newMapperStore(t *testing.T) store.Store {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	return st
 }
 

@@ -9,6 +9,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 	"time"
 
@@ -208,36 +210,72 @@ func (w *webMethod) Resolve(did string) (*Document, error) {
 	if err := json.Unmarshal(body, &doc); err != nil {
 		return nil, fmt.Errorf("did:web parse: %w", err)
 	}
+	// A host may serve a document that names a different DID. Accepting it would let one domain
+	// speak for another identifier, so the document must claim the DID it was fetched for.
+	if doc.ID != did {
+		return nil, fmt.Errorf("did:web resolve %s: document id is %q", did, doc.ID)
+	}
 	return &doc, nil
 }
 
 func (w *webMethod) checkAllowlist(did string) error {
-	rest := strings.TrimPrefix(did, "did:web:")
-	domain := strings.SplitN(rest, ":", 2)[0]
+	hostPort, _, err := parseDIDWebHost(did)
+	if err != nil {
+		return err
+	}
+	host, _, err := net.SplitHostPort(hostPort)
+	if err != nil {
+		// No port in the DID: the host is the whole segment.
+		host = hostPort
+	}
 	for _, allowed := range w.cfg.AllowedDomains {
-		if domain == allowed || strings.HasSuffix(domain, "."+allowed) {
+		if host == allowed || strings.HasSuffix(host, "."+allowed) {
 			return nil
 		}
 	}
-	return fmt.Errorf("did:web: domain %q not in allowlist", domain)
+	return fmt.Errorf("did:web: domain %q not in allowlist", host)
+}
+
+// parseDIDWebHost splits the domain segment of a did:web DID into its host and optional port. The
+// port is percent-encoded in the DID (did:web:example.com%3A8443), so the segment is decoded
+// first. The remaining colon-separated segments form the path and are returned untouched.
+func parseDIDWebHost(did string) (host string, rest []string, err error) {
+	raw := strings.TrimPrefix(did, "did:web:")
+	if raw == did {
+		return "", nil, fmt.Errorf("not a did:web DID: %s", did)
+	}
+	parts := strings.Split(raw, ":")
+	segment, err := url.PathUnescape(parts[0])
+	if err != nil {
+		return "", nil, fmt.Errorf("did:web: invalid domain %q: %w", parts[0], err)
+	}
+	if strings.Contains(segment, ":") {
+		h, port, err := net.SplitHostPort(segment)
+		if err != nil {
+			return "", nil, fmt.Errorf("did:web: invalid host %q: %w", segment, err)
+		}
+		n, err := strconv.Atoi(port)
+		if err != nil || n < 1 || n > 65535 {
+			return "", nil, fmt.Errorf("did:web: invalid port %q", port)
+		}
+		return net.JoinHostPort(h, port), parts[1:], nil
+	}
+	return segment, parts[1:], nil
 }
 
 // didWebURL converts a did:web DID to its HTTPS document URL.
 // did:web:example.com          → https://example.com/.well-known/did.json
 // did:web:example.com:user:bob → https://example.com/user/bob/did.json
+// did:web:example.com%3A8443   → https://example.com:8443/.well-known/did.json
 func didWebURL(did string) (string, error) {
-	// Strip "did:web:" prefix
-	rest := strings.TrimPrefix(did, "did:web:")
-	if rest == did {
-		return "", fmt.Errorf("not a did:web DID: %s", did)
+	host, rest, err := parseDIDWebHost(did)
+	if err != nil {
+		return "", err
 	}
-	parts := strings.Split(rest, ":")
-	domain := parts[0]
-	if len(parts) == 1 {
-		return "https://" + domain + "/.well-known/did.json", nil
+	if len(rest) == 0 {
+		return "https://" + host + "/.well-known/did.json", nil
 	}
-	path := strings.Join(parts[1:], "/")
-	return "https://" + domain + "/" + path + "/did.json", nil
+	return "https://" + host + "/" + strings.Join(rest, "/") + "/did.json", nil
 }
 
 // toMultibase encodes a raw public key with a multicodec prefix into multibase (base58btc).

@@ -35,7 +35,7 @@ func (f *fakeRelay) serve() {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
 	r := bufio.NewReader(conn)
 	write := func(s string) { _, _ = conn.Write([]byte(s + "\r\n")) }

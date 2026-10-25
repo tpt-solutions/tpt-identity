@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"testing"
 	"time"
@@ -19,11 +20,7 @@ import (
 // and X-Total-Count must count matches, not the whole table.
 func TestAdminRoleFilterAppliesBeforePagination(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	now := time.Now()
 	// Interleave roles so the matches are not all on the first page of the raw table.

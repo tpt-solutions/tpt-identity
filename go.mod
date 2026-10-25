@@ -7,6 +7,7 @@ require (
 	github.com/go-ldap/ldap/v3 v3.4.13
 	github.com/go-webauthn/webauthn v0.17.4
 	github.com/google/uuid v1.6.0
+	github.com/jackc/pgx/v5 v5.9.2
 	github.com/multiformats/go-multibase v0.2.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/santhosh-tekuri/jsonschema/v6 v6.0.2
@@ -14,6 +15,13 @@ require (
 	github.com/spf13/viper v1.19.0
 	golang.org/x/crypto v0.52.0
 	modernc.org/sqlite v1.34.4
+)
+
+require (
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 )
 
 require (

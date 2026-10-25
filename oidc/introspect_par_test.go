@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -29,11 +30,7 @@ const (
 // second public client (other-rp), then returns a provider and its signing key.
 func introSetup(t *testing.T) (*oidc.Provider, ed25519.PrivateKey, store.Store) {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	secretHash := sha256.Sum256([]byte(introSecret))
 	clients := []*store.OIDCClient{
 		{ClientID: introRP, ClientName: "confidential", ClientSecretHash: hex.EncodeToString(secretHash[:]),

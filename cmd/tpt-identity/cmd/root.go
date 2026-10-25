@@ -22,7 +22,6 @@ receipts, and an OIDC identity provider built on open standards.`,
 	root.AddCommand(configCmd())
 	root.AddCommand(schemasCmd())
 	root.AddCommand(initCmd())
-	root.AddCommand(versionCmd())
-	root.AddCommand(configCmd())
+	root.AddCommand(doctorCmd())
 	return root
 }

@@ -160,7 +160,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Enforce suspended/deleted roles in token + `/me` paths; admin delete purges refresh tokens/passwords/links
 - [x] Platform issuer must be a DID; implement `/.well-known/did.json` (`api/server.go:439` returns 404); `did_web` config not read: the platform DID is derived from `issuer` (see api/platform_did.go)
 - [x] `POST /api/v1/identities` discards generated private keys; make SaveIdentity+SaveDocument atomic
-- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go` — presentation submit now verifies the holder signature, nonce, domain, enclosed credentials and holder==subject against a stored single-use request; SD-JWT KB/exp/kid checks still open — the issuer JWT kid now selects the verification key; the other sub-items are still open
+- [ ] VP / SD-JWT: holder==subject check, enforce KB when `cnf` present, honour `kid`, require `exp`, verify signatures in `pkg/pe` + `api/presentations.go` — presentation submit now verifies the holder signature, nonce, domain, enclosed credentials and holder==subject against a stored single-use request; the SD-JWT checks are done and covered by tests — `exp` is required, the issuer JWT kid selects the verification key, a `cnf` credential needs a KB-JWT, and holder==subject is enforced (`pkg/vc/sdjwt_binding_test.go`). Still open: signature verification in `pkg/pe`
 - [x] `http.MaxBytesReader` on all JSON bodies; server timeouts (`ReadHeaderTimeout` etc.) + graceful shutdown
 - [x] TOTP: require old factor to re-enrol/unenrol; replay protection; pending state before first verify
 - [x] Consent: grant ID/subject from server not body; call `validateGrant`; unknown scope must not bypass extra-sensitive; revoke/delete check subject; `CanAccess` still has no callers (the policy engine is not yet wired into credential access)
@@ -170,7 +170,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] `/me/export` leaks `Code`, `CodeChallenge`, `AccessToken` of sessions
 - [x] Upstream OIDC RP: verify `iss`/`aud`/`nonce`/`email_verified`; timeouts; Ed25519 key length check; bootstrap VC only for verified email
 - [x] Metrics: label by route pattern, not raw `r.URL.Path` (cardinality)
-- [ ] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge — the dial now uses the checked address (DNS rebinding); the document id, port and cache items are still open
+- [x] `did:web`: dial resolved IP (DNS rebinding), check doc `id`, `%3A` ports, bounded resolver cache + Purge — done: the dial uses the checked address; the resolved document must claim the requested DID; a percent-encoded port is parsed and the allowlist matches the bare host; the resolver cache is capped at 10 000 entries, dropping expired entries first and never a pinned one (`pkg/did/web_internal_test.go`, `internal/resolver/evict_internal_test.go`)
 - [ ] DIDComm: anoncrypt returns spoofable sender; add replay/`exp` handling; ECDH-1PU tag in KDF; handle received messages — sender checks, expiry, clock and replay are done (api/didcomm.go). Still open: the ECDH-1PU content tag in the KDF (a wire-format change) and handling of received messages beyond logging
 - [ ] WebAuthn login finish must issue a session; check `CloneWarning`; anchored key visible in DID resolution — passkey login now returns a session token and refuses cloned authenticators; the anchored key in DID resolution is still open
 - [ ] Audit log: atomic append (head read + insert), timestamp in hash, surface append errors — atomic append and error logging are done; timestamp in the hash needs a versioned hash format first
@@ -190,14 +190,15 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Re-check credential bootstrap (`maybeIssueBootstrapVC`) after issuer-DID fix
 - [ ] `did:ion` Create not implemented (`pkg/did/ion.go:35`)
 - [ ] Multi-key JWKS / key rotation (`publicJWKS()` returns one key); earlier claim in this file is inaccurate — retired keys now verify by kid and are published in the JWKS (identity.previous_keys). Generating a rotated key and its rotation CLI are still open
-- [ ] Config validation (issuer required + https, TTL parsing, unknown keys) — issuer and TTL validation done; unknown-key checks open — `config validate` is in place; the unknown-key check is still open
+- [x] Config validation (issuer required + https, TTL parsing, unknown keys) — done: `config validate` checks the issuer, TTLs and unknown keys (`knownConfigKeys`)
 - [ ] Readiness probe should check keys loaded + migrations applied — signing-key check added. The migration check is blocked: OpenSQLite creates tables inline and never writes schema_migrations, which only `migrate up` does, so a check would mark a normal start as degraded. Unify the two schema paths first
 - [x] Graceful shutdown and context cancellation for background goroutines (consent warning, rate-limiter eviction, webhook delivery) — consent reminders, rate-limiter, WebAuthn eviction and webhook deliveries all stop or drain on shutdown
 ### 13.5 Standards / production readiness
 - [ ] Key rotation: multi-key JWKS with `kid` history, rotation CLI; RS256/ES256 for RP compatibility — the verification side is done (retired keys by kid, in the JWKS). Still open: the rotation CLI, RS256/ES256, and the DID-document side
 - [ ] DID document update / key rotation / deactivation API
 - [x] Persist OID4VP state and access-token revocation (replica-safe) — done: OID4VP requests and responses are in the store, and access-token revocation was already persistent. Replica-safe for both
-- [ ] PostgreSQL store; multi-tenancy via existing `TenantID` fields
+- [x] PostgreSQL store — done: `db_path` takes a `postgres://` URL and the same query code runs on both databases (`internal/store/dialect.go`, `postgres.go`). The schema is created on start under an advisory lock, so replicas starting together do not race (reproduced and fixed). Read-then-write transactions (audit chain, auth failures, code redemption, reset tokens, status lists) take advisory locks; without them PostgreSQL forks the audit chain and loses failure counts (reproduced). The store and API test suites run on both when `TPT_TEST_POSTGRES_DSN` is set; CI runs them against a PostgreSQL 16 service. Still open: versioned PostgreSQL migrations (the schema is `CREATE … IF NOT EXISTS`, so a later column needs an explicit ALTER list), and `migrate` is SQLite-only
+- [ ] Multi-tenancy via existing `TenantID` fields (the PostgreSQL store is done; tenant scoping is not)
 - [ ] Scoped API keys / RBAC; admin credential separate from API key — scoped API keys and a separate admin credential are done; per-user roles (RBAC) are still open
 - [x] Complete OIDC discovery metadata; serve `/.well-known/oauth-authorization-server` (RFC 8414) — discovery now advertises S256, response modes, auth methods and the request-parameter flags; RFC 8414 is served (`api/discovery_test.go`)
 - [ ] `private_key_jwt` client auth, DPoP (RFC 9449), JAR (RFC 9101), RFC 9068 `at+jwt`, RFC 9207 `iss` param
@@ -207,14 +208,14 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] Token status list for SD-JWT VC; suspend purpose
 
 ### 13.6 Test coverage
-- [ ] Tests for `internal/authn`, `internal/bridge` (+providers), `internal/events`, `internal/store`, `internal/auditlog`, `internal/resolver` — lockout, OIDC RP, netguard client IP done; the rest open
+- [ ] Tests for `internal/authn`, `internal/bridge` (+providers), `internal/events`, `internal/store`, `internal/auditlog`, `internal/resolver` — lockout, OIDC RP, netguard client IP, audit-log chaining and resolver cache bounds done; the rest open
 - [x] Tests for `pkg/recovery`, `pkg/keystore`, `pkg/pe`, `pkg/marketplace` and `cmd/` (config validate, version)
 - [ ] Regression test per security fix (forged `X-Subject-DID` → 401; empty `api_key` → startup fails; magic-link response has no token) — the named cases exist: forged X-Subject-DID, empty api_key, magic-link without a token. Other fixes still lack a regression test
 - [x] `go test -race ./...` in CI
 
 ### 13.7 Adoption & developer experience
 - [x] `tpt-identity init` wizard — `init` writes keys, a config with fresh secrets, and the migrated database; prod encrypts keys with TPT_IDENTITY_PASSPHRASE
-- [ ] `tpt-identity doctor` / `config validate` / `version` with actionable errors — `config validate` and `version` are done; `doctor` is still open
+- [x] `tpt-identity doctor` / `config validate` / `version` with actionable errors — all three done; `doctor` also checks the database directory, the DIDComm key file and the listen address
 - [ ] `tpt-identity serve --demo` sandbox mode (seeded issuers, schemas, fake wallet)
 - [x] Remove enabled-by-default placeholder Google bridge from `config.yaml.example`; add missing keys (cors, trusted_proxies, consent, marketplace, webauthn)
 - [ ] Published image on GHCR via goreleaser + GitHub Actions; compose with auto-init entrypoint (no Go needed for keygen)

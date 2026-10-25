@@ -1,6 +1,7 @@
 package oidc_test
 
 import (
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -8,7 +9,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
 	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
@@ -34,11 +34,7 @@ func exchangeForm(subject string) url.Values {
 
 // Token exchange with no client authentication must be refused, even with a valid token.
 func TestTokenExchangeRequiresClientAuth(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	p := oidc.NewProvider(teIssuer, priv, "key-1", st)
 	tok, _ := oidc.IssueAccessToken(teIssuer, "did:peer:sub", "client-1", time.Hour, priv, "key-1")
@@ -54,11 +50,7 @@ func TestTokenExchangeRequiresClientAuth(t *testing.T) {
 
 // An ID token must not be accepted as the subject token of an exchange.
 func TestTokenExchangeRejectsIDTokenSubject(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	p := oidc.NewProvider(teIssuer, priv, "key-1", st)
 	idTok, _ := oidc.IssueIDToken(teIssuer, "did:peer:sub", "client-1", "n", time.Hour, priv, nil, "key-1")

@@ -2,19 +2,15 @@ package authn_test
 
 import (
 	"context"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"testing"
 
 	"github.com/tpt-solutions/tpt-identity/internal/authn"
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 func newLockoutManager(t *testing.T) *authn.LockoutManager {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	return authn.NewLockoutManager(st)
 }
 

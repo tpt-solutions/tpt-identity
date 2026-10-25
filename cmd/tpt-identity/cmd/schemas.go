@@ -28,9 +28,9 @@ func schemasCmd() *cobra.Command {
 				schemas = schema.SchemasForCategory(category)
 			}
 			w := tabwriter.NewWriter(cmd.OutOrStdout(), 0, 0, 2, ' ', 0)
-			fmt.Fprintln(w, "ID\tNAME\tEXTRA-SENSITIVE")
+			_, _ = fmt.Fprintln(w, "ID\tNAME\tEXTRA-SENSITIVE")
 			for _, s := range schemas {
-				fmt.Fprintf(w, "%s\t%s\t%t\n", s.ID, s.Name, s.ExtraSensitive)
+				_, _ = fmt.Fprintf(w, "%s\t%s\t%t\n", s.ID, s.Name, s.ExtraSensitive)
 			}
 			return w.Flush()
 		},

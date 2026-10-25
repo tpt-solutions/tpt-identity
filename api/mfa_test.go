@@ -8,6 +8,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -67,11 +68,7 @@ func secretFromURI(t *testing.T, uri string) string {
 
 func newMFAServer(t *testing.T) (*api.Server, string) {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	now := time.Now()
 	if err := st.SaveIdentity(context.Background(), &store.Identity{
 		DID: mfaDID, Method: "peer", Role: "user", CreatedAt: now, UpdatedAt: now,

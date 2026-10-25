@@ -12,7 +12,7 @@ import (
 )
 
 // migrateStatusLists creates the status_lists table. Called from migrate().
-func (s *SQLiteStore) migrateStatusLists() error {
+func (s *SQLStore) migrateStatusLists() error {
 	_, err := s.db.Exec(`
 	CREATE TABLE IF NOT EXISTS status_lists (
 		id          TEXT PRIMARY KEY,
@@ -24,10 +24,16 @@ func (s *SQLiteStore) migrateStatusLists() error {
 	);
 	CREATE INDEX IF NOT EXISTS idx_status_lists_issuer ON status_lists(issuer_did);
 	`)
-	return err
+	if err != nil {
+		return err
+	}
+	// Idempotent: databases created before created_at existed gain the column. Lists from before
+	// it have no creation time and sort last.
+	_, _ = s.db.Exec(`ALTER TABLE status_lists ADD COLUMN created_at DATETIME`)
+	return nil
 }
 
-func (s *SQLiteStore) PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error {
+func (s *SQLStore) PutCredential(ctx context.Context, cred *vc.VerifiableCredential) error {
 	b, err := json.Marshal(cred)
 	if err != nil {
 		return err
@@ -44,32 +50,36 @@ func (s *SQLiteStore) PutCredential(ctx context.Context, cred *vc.VerifiableCred
 	return err
 }
 
-func (s *SQLiteStore) CreateStatusList(ctx context.Context, rec *StatusListRecord) error {
+func (s *SQLStore) CreateStatusList(ctx context.Context, rec *StatusListRecord) error {
+	now := time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
-		INSERT INTO status_lists (id, issuer_did, size_bits, next_index, bits, updated_at) VALUES (?,?,?,?,?,?)`,
-		rec.ID, rec.IssuerDID, rec.SizeBits, rec.NextIndex, rec.Bits, time.Now().UTC())
+		INSERT INTO status_lists (id, issuer_did, size_bits, next_index, bits, updated_at, created_at) VALUES (?,?,?,?,?,?,?)`,
+		rec.ID, rec.IssuerDID, rec.SizeBits, rec.NextIndex, rec.Bits, now, now)
 	return err
 }
 
-func (s *SQLiteStore) GetStatusList(ctx context.Context, id string) (*StatusListRecord, error) {
+func (s *SQLStore) GetStatusList(ctx context.Context, id string) (*StatusListRecord, error) {
 	return scanStatusList(s.db.QueryRowContext(ctx, `
 		SELECT id, issuer_did, size_bits, next_index, bits, updated_at FROM status_lists WHERE id=?`, id))
 }
 
-func (s *SQLiteStore) ActiveStatusList(ctx context.Context, issuerDID string) (*StatusListRecord, error) {
+func (s *SQLStore) ActiveStatusList(ctx context.Context, issuerDID string) (*StatusListRecord, error) {
 	return scanStatusList(s.db.QueryRowContext(ctx, `
 		SELECT id, issuer_did, size_bits, next_index, bits, updated_at FROM status_lists
-		WHERE issuer_did=? AND next_index < size_bits ORDER BY rowid DESC LIMIT 1`, issuerDID))
+		WHERE issuer_did=? AND next_index < size_bits ORDER BY created_at DESC NULLS LAST LIMIT 1`, issuerDID))
 }
 
 // AllocateStatusIndex reserves the next index. Read and write share a transaction, so two issuances
 // never receive the same index.
-func (s *SQLiteStore) AllocateStatusIndex(ctx context.Context, listID string) (int, error) {
+func (s *SQLStore) AllocateStatusIndex(ctx context.Context, listID string) (int, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return 0, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := tx.lock(ctx, "status_list:"+listID); err != nil {
+		return 0, err
+	}
 
 	var next, size int
 	err = tx.QueryRowContext(ctx, `SELECT next_index, size_bits FROM status_lists WHERE id=?`, listID).Scan(&next, &size)
@@ -93,12 +103,15 @@ func (s *SQLiteStore) AllocateStatusIndex(ctx context.Context, listID string) (i
 }
 
 // SetStatusBit sets the revocation bit at index. The read-modify-write runs in one transaction.
-func (s *SQLiteStore) SetStatusBit(ctx context.Context, listID string, index int) (*StatusListRecord, error) {
+func (s *SQLStore) SetStatusBit(ctx context.Context, listID string, index int) (*StatusListRecord, error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tx.Rollback() }()
+	if err := tx.lock(ctx, "status_list:"+listID); err != nil {
+		return nil, err
+	}
 
 	rec, err := scanStatusList(tx.QueryRowContext(ctx, `
 		SELECT id, issuer_did, size_bits, next_index, bits, updated_at FROM status_lists WHERE id=?`, listID))

@@ -2,11 +2,11 @@ package api_test
 
 import (
 	"context"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"testing"
 
 	"github.com/tpt-solutions/tpt-identity/internal/bridge"
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 const regJSON = "application/json"
@@ -54,11 +54,7 @@ func TestRegisterClientAcceptsValidMetadata(t *testing.T) {
 
 // A caller may not unlink an identity it does not own.
 func TestUnlinkRefusesForeignLink(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	ctx := context.Background()
 	m := bridge.NewMapper(st)
 	// Victim has two links, so "last auth method" does not mask the ownership check.

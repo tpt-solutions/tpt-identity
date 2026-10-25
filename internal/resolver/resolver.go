@@ -8,7 +8,12 @@ import (
 	"github.com/tpt-solutions/tpt-identity/pkg/did"
 )
 
-const defaultTTL = 5 * time.Minute
+const (
+	defaultTTL = 5 * time.Minute
+	// maxEntries bounds the cache. Resolve is reachable with attacker-chosen DIDs, so an unbounded
+	// map is a memory-exhaustion path.
+	maxEntries = 10000
+)
 
 type entry struct {
 	doc     *did.Document
@@ -47,9 +52,32 @@ func (r *Resolver) Resolve(id string) (*did.Document, error) {
 	}
 
 	r.mu.Lock()
+	if _, exists := r.cache[id]; !exists && len(r.cache) >= maxEntries {
+		r.evictLocked()
+	}
 	r.cache[id] = entry{doc: doc, expires: time.Now().Add(r.ttl)}
 	r.mu.Unlock()
 	return doc, nil
+}
+
+// evictLocked makes room for one entry. It drops expired entries first and, if the cache is still
+// full, an arbitrary unpinned one. The caller must hold r.mu.
+func (r *Resolver) evictLocked() {
+	now := time.Now()
+	for k, e := range r.cache {
+		if !e.pinned && now.After(e.expires) {
+			delete(r.cache, k)
+		}
+	}
+	if len(r.cache) < maxEntries {
+		return
+	}
+	for k, e := range r.cache {
+		if !e.pinned {
+			delete(r.cache, k)
+			return
+		}
+	}
 }
 
 // Invalidate removes a DID from the cache, forcing a fresh fetch on next access.

@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -26,11 +27,7 @@ const (
 // newTestServer wires a Server against an in-memory SQLite store with a fresh Ed25519 key.
 func newTestServer(t *testing.T) *api.Server {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	_, priv, err := crypto.GenerateSigningKey()
 	if err != nil {
@@ -261,11 +258,7 @@ func TestListGrantsRequiresBearer(t *testing.T) {
 }
 
 func TestListGrantsEmpty(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	srv := api.NewServer(api.Config{
 		APIKey:     testAPIKey,
@@ -376,11 +369,7 @@ func TestAuthorizeRejectsForgedSubjectHeader(t *testing.T) {
 
 // An empty api_key must fail closed: gated endpoints reject every caller.
 func TestAuthFailsClosedWithEmptyAPIKey(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	srv := api.NewServer(api.Config{
 		Issuer:     testIssuer,
@@ -406,11 +395,7 @@ func (r *recordingSender) SendMagicLink(_ context.Context, _, verifyURL string, 
 
 func newMagicLinkServer(t *testing.T, sender api.MagicLinkSender) *api.Server {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	return api.NewServer(api.Config{
 		Issuer:          testIssuer,

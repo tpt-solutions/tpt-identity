@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -134,11 +135,7 @@ const revIssuer = "https://issuer.example.com"
 // newRevocationProvider returns a provider over an in-memory store plus a token it issued.
 func newRevocationProvider(t *testing.T) (*oidc.Provider, string) {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	saveTestIdentity(t, st, "did:peer:sub")
 	p := oidc.NewProvider(revIssuer, priv, "key-1", st)
@@ -174,11 +171,7 @@ func TestRevokedAccessTokenRejected(t *testing.T) {
 
 // ID tokens are signed by the same key but must not authenticate API calls.
 func TestVerifyAccessTokenRejectsIDToken(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	p := oidc.NewProvider(revIssuer, priv, "key-1", st)
 	idTok, err := oidc.IssueIDToken(revIssuer, "did:peer:sub", "client-1", "n", time.Hour, priv, nil, "key-1")
@@ -192,11 +185,7 @@ func TestVerifyAccessTokenRejectsIDToken(t *testing.T) {
 
 // A token minted by a different issuer, even with a valid signature, is rejected.
 func TestVerifyAccessTokenRejectsWrongIssuer(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	p := oidc.NewProvider(revIssuer, priv, "key-1", st)
 	tok, err := oidc.IssueAccessToken("https://other.example.com", "did:peer:sub", "client-1", time.Hour, priv, "key-1")

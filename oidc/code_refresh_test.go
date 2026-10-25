@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -28,11 +29,7 @@ const (
 // newCodeProvider returns a provider with one registered public client.
 func newCodeProvider(t *testing.T) *oidc.Provider {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	if err := st.SaveClient(context.Background(), &store.OIDCClient{
 		ClientID:                crClient,
 		ClientName:              "test rp",

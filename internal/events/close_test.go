@@ -2,6 +2,7 @@ package events_test
 
 import (
 	"context"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"log/slog"
 	"testing"
 	"time"
@@ -14,11 +15,7 @@ import (
 // in flight for several seconds. That lets Close be tested against a real in-flight delivery.
 func busWithFailingSubscription(t *testing.T) *events.Bus {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	if err := st.SaveWebhookSubscription(context.Background(), &store.WebhookSubscription{
 		ID: "sub-1", URL: "http://10.0.0.1/hook", SigningSecret: "secret-value-0123456789",
 		EventTypes: []string{"credential.issued"}, CreatedAt: time.Now(),

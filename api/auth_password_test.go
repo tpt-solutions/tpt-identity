@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -32,11 +33,7 @@ const (
 func newPasswordServer(t *testing.T) (*api.Server, store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	pw := bridgeproviders.NewPasswordBridge(st)
 	if err := pw.SetPassword(ctx, pwUser, pwNormal); err != nil {
@@ -108,11 +105,7 @@ func (c *captureSender) SendPasswordReset(_ context.Context, _, rawToken string,
 // The reset token goes to the sender only; no event-bus subscriber may see it.
 func TestPasswordResetTokenNotOnEventBus(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	pw := bridgeproviders.NewPasswordBridge(st)
 	if err := pw.SetPassword(ctx, pwUser, pwNormal); err != nil {
 		t.Fatalf("set password: %v", err)
@@ -172,11 +165,7 @@ func TestBridgeLoginRejectsUnregisteredClient(t *testing.T) {
 func newResetServer(t *testing.T, sender api.PasswordResetSender) (*api.Server, store.Store) {
 	t.Helper()
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	pw := bridgeproviders.NewPasswordBridge(st)
 	if err := pw.SetPassword(ctx, pwUser, pwNormal); err != nil {
 		t.Fatalf("set password: %v", err)
@@ -241,11 +230,7 @@ func TestPasswordResetDoesNotCreateAccounts(t *testing.T) {
 // A signed-in account can change its password with the current one (was always 500).
 func TestPasswordChangeSucceeds(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	pw := bridgeproviders.NewPasswordBridge(st)
 	if err := pw.SetPassword(ctx, pwUser, pwNormal); err != nil {
 		t.Fatalf("set password: %v", err)

@@ -3,6 +3,7 @@ package api_test
 import (
 	"crypto/ed25519"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"strings"
 	"testing"
@@ -25,11 +26,7 @@ const (
 // newRecoveryServer returns a server with a 2-of-3 recovery config enrolled for recSubject.
 func newRecoveryServer(t *testing.T) (*api.Server, ed25519.PrivateKey) {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	srv := api.NewServer(api.Config{
 		APIKey:     testAPIKey,

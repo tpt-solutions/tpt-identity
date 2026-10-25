@@ -2,21 +2,16 @@ package store_test
 
 import (
 	"context"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"sync"
 	"testing"
 	"time"
-
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // Concurrent failures for one subject are all counted: the read and write share a transaction.
 func TestConcurrentAuthFailuresAllCounted(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	const failures = 30
 	var wg sync.WaitGroup
@@ -46,11 +41,7 @@ func TestConcurrentAuthFailuresAllCounted(t *testing.T) {
 // Failures below the first threshold do not lock the account.
 func TestFewFailuresDoNotLock(t *testing.T) {
 	ctx := context.Background()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	for i := 0; i < 4; i++ {
 		if err := st.RecordAuthFailure(ctx, "typo@example.com"); err != nil {

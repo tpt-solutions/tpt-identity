@@ -3,6 +3,7 @@ package api_test
 import (
 	"context"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"strings"
 	"testing"
@@ -19,11 +20,7 @@ import (
 // consentServer returns a server and bearer tokens for two subjects.
 func consentServer(t *testing.T) (*api.Server, string, string) {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	now := time.Now()
 	for _, did := range []string{"did:peer:alice", "did:peer:bob"} {
 		if err := st.SaveIdentity(context.Background(), &store.Identity{DID: did, Method: "peer", Role: "user", CreatedAt: now, UpdatedAt: now}); err != nil {

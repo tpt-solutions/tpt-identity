@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"testing"
 	"time"
@@ -18,11 +19,7 @@ import (
 // Suspending an identity must stop its unexpired tokens from working at once.
 func TestSuspendedIdentityLosesAccess(t *testing.T) {
 	const did = "did:peer:suspend-me"
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	now := time.Now()
 	if err := st.SaveIdentity(context.Background(), &store.Identity{
 		DID: did, Method: "peer", Role: "user", CreatedAt: now, UpdatedAt: now,

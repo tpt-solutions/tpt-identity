@@ -1,13 +1,13 @@
 package api_test
 
 import (
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"testing"
 	"time"
 
 	"github.com/tpt-solutions/tpt-identity/api"
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/oidc"
 	"github.com/tpt-solutions/tpt-identity/pkg/crypto"
 )
@@ -20,11 +20,7 @@ const (
 // newScopedTestServer builds a server with a separate admin key and one webhook-only scoped key.
 func newScopedTestServer(t *testing.T) *api.Server {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	_, priv, err := crypto.GenerateSigningKey()
 	if err != nil {
@@ -91,11 +87,7 @@ func TestScopedKeysCannotReachAdminOrUnknownTokens(t *testing.T) {
 
 // A scoped key with an empty key string must never match an empty bearer.
 func TestEmptyScopedKeyDoesNotMatchEmptyBearer(t *testing.T) {
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 	_, priv, _ := crypto.GenerateSigningKey()
 	srv := api.NewServer(api.Config{
 		ScopedKeys: []api.ScopedKey{{Name: "blank", Key: "", Scopes: []string{"*"}}},

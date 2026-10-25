@@ -3,6 +3,7 @@ package oidc_test
 import (
 	"bytes"
 	"encoding/json"
+	"github.com/tpt-solutions/tpt-identity/internal/store/storetest"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -35,11 +36,7 @@ type vpFixture struct {
 // credential issued to the holder, and an OID4VP handler with a resolver.
 func newVPFixture(t *testing.T) *vpFixture {
 	t.Helper()
-	st, err := store.OpenSQLite(":memory:")
-	if err != nil {
-		t.Fatalf("open store: %v", err)
-	}
-	t.Cleanup(func() { _ = st.Close() })
+	st := storetest.New(t)
 
 	issuerPub, issuerPriv, _ := crypto.GenerateSigningKey()
 	issuerDID, _, err := did.Create("peer", did.CreateOptions{SigningPub: issuerPub})
