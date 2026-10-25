@@ -54,7 +54,8 @@ func (p *peerMethod) Create(opts CreateOptions) (string, *Document, error) {
 	if len(opts.EncPub) == 32 {
 		encKeyID := did + "#key-2"
 		encRaw := append([]byte{0xec, 0x01}, opts.EncPub...)
-		encMB := "z" + base64RawURL(encRaw)
+		// "u" is multibase base64url, the encoding of this payload. Writing "z" here would claim base58btc.
+		encMB := "u" + base64RawURL(encRaw)
 		doc.VerificationMethod = append(doc.VerificationMethod, VerificationMethod{
 			ID:                 encKeyID,
 			Type:               "X25519KeyAgreementKey2020",
