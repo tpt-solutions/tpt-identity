@@ -25,6 +25,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Passkeys appear in the resolved DID document, and deleting a passkey removes its key.
 - Audit log hash version 2 covers the recorded time. Rows written before this change still verify.
 - `pe.Evaluate` requires a credential verifier. A credential that fails verification never matches.
+- `examples/rp-go`: a relying party that runs the PKCE flow with private_key_jwt, checks the ID token, and reads userinfo. It has integration tests against a live in-process platform.
 
 ### Changed
 

@@ -220,7 +220,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [x] Remove enabled-by-default placeholder Google bridge from `config.yaml.example`; add missing keys (cors, trusted_proxies, consent, marketplace, webauthn)
 - [ ] Published image on GHCR via goreleaser + GitHub Actions; compose with auto-init entrypoint (no Go needed for keygen)
 - [ ] README "5-minute demo" (issue + verify via curl); fix wrong WebAuthn paths; document OID4VC/VP, device, PAR, DIDComm, admin, privacy routes; add CI badge
-- [ ] `examples/`: RP app (Go + Node, OIDC+PKCE), age-over-18 SD-JWT verifier, webhook receiver, custom-schema registration (`Source: community`, v1→v2), extra-sensitive consent demo
+- [ ] `examples/`: RP app — done for Go: `examples/rp-go` runs the PKCE flow, private_key_jwt, ID token and userinfo checks, with integration tests against a live in-process platform. Still open: the Node variant, the hosted login page the RP needs to avoid taking passwords, the age-over-18 SD-JWT verifier, webhook receiver, custom-schema registration (`Source: community`, v1→v2), extra-sensitive consent demo
 - [ ] Issuer starter profiles: university (education.*), clinic/pharmacy (healthcare.*), bank KYC (finance.* + identity.*), employer (professional.employment)
 - [ ] Embedded minimal HTML pages (login, consent, device approval, wallet/admin) via `embed`
 - [x] OpenAPI spec (`api/openapi.yaml`, served at `/openapi.yaml`, route-drift test)
