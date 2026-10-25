@@ -178,22 +178,24 @@ func decodeX25519Multibase(mb string) ([32]byte, error) {
 	if len(mb) < 2 {
 		return [32]byte{}, errors.New("x25519 key too short")
 	}
-	_, raw, err := multibase.Decode(mb)
-	if err != nil {
-		// Fallback: try base64url-nopad regardless of the prefix character.
-		// did:peer in this codebase stores enc keys as prefix + base64url(multicodec||key).
-		raw, err = base64.RawURLEncoding.DecodeString(mb[1:])
-		if err != nil {
-			return [32]byte{}, fmt.Errorf("decode x25519 key multibase: %w", err)
+	// Two encodings occur. The standard one is multibase. Documents written before did:peer used the "u" prefix
+	// carry base64url after a "z" prefix. The prefix alone cannot be trusted: base58 decodes some base64url text
+	// to other bytes. So each candidate is accepted only if it carries the x25519-pub multicodec.
+	var candidates [][]byte
+	if _, raw, err := multibase.Decode(mb); err == nil {
+		candidates = append(candidates, raw)
+	}
+	if raw, err := base64.RawURLEncoding.DecodeString(mb[1:]); err == nil {
+		candidates = append(candidates, raw)
+	}
+	for _, raw := range candidates {
+		if len(raw) >= 34 && raw[0] == 0xEC && raw[1] == 0x01 {
+			var out [32]byte
+			copy(out[:], raw[2:34])
+			return out, nil
 		}
 	}
-	// Expect multicodec prefix for x25519-pub: 0xEC 0x01 (varint 236), then 32 key bytes.
-	if len(raw) < 34 || raw[0] != 0xEC || raw[1] != 0x01 {
-		return [32]byte{}, errors.New("x25519 key has unexpected multicodec prefix (expected x25519-pub 0xEC 0x01)")
-	}
-	var out [32]byte
-	copy(out[:], raw[2:34])
-	return out, nil
+	return [32]byte{}, errors.New("x25519 key has no x25519-pub multicodec prefix (0xEC 0x01)")
 }
 
 // DefaultDIDCommTypes are the message types the inbox keeps when the configuration names none. Only
