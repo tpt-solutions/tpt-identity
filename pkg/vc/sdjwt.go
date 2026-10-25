@@ -134,9 +134,9 @@ func (t *SDJWTToken) Present(revealKeys []string) string {
 // binds the presentation to a specific nonce and audience (anti-replay).
 func (t *SDJWTToken) PresentWithKeyBinding(revealKeys []string, holderKey ed25519.PrivateKey, holderKID, nonce, audience string) (string, error) {
 	base := t.Present(revealKeys)
-	// sd_hash = sha256 of the SD-JWT string without the trailing ~
-	forHash := strings.TrimSuffix(base, "~")
-	h := sha256.Sum256([]byte(forHash))
+	// sd_hash is the SHA-256 of the SD-JWT portion as presented, trailing ~ included. verifyKBJWT hashes it the same way
+	// (sdHashOf); hashing without the ~ would make every key-bound presentation fail verification.
+	h := sha256.Sum256([]byte(base))
 	sdHash := base64.RawURLEncoding.EncodeToString(h[:])
 
 	kbClaims := map[string]any{
