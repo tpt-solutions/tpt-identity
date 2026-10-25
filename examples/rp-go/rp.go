@@ -110,8 +110,8 @@ func randomURLSafe(n int) (string, error) {
 // Run performs the whole sign-in for one user and returns the verified result.
 //
 // The password is sent to the platform and never stored or logged by the RP. This RP takes the password
-// itself because the platform has no hosted login page yet. A production RP would redirect the user's
-// browser to the platform instead.
+// itself to show the protocol. A production RP would redirect the user's
+// browser to the platform's hosted login page at /login instead.
 func (rp *RP) Run(ctx context.Context, identifier, password string) (*Result, error) {
 	flow, err := NewFlow()
 	if err != nil {

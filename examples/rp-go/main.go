@@ -102,8 +102,8 @@ var pageTemplate = template.Must(template.New("page").Parse(`<!doctype html>
 <style>body{font-family:system-ui,sans-serif;max-width:40rem;margin:2rem auto;padding:0 1rem}
 pre{background:#f4f4f4;padding:1rem;overflow:auto}.warn{color:#8a4b00}</style>
 <h1>rp-go sign-in</h1>
-<p class="warn">Demo only. This relying party collects the password itself, because the platform has no
-hosted login page yet. A production relying party sends the user's browser to the platform instead.</p>
+<p class="warn">Demo only. This relying party collects the password itself, to show the protocol. A production relying
+party sends the user's browser to the platform's login page at /login instead.</p>
 <form method="post" action="/login">
   <label>Identifier <input name="identifier" autocomplete="username" required></label><br>
   <label>Password <input name="password" type="password" autocomplete="current-password" required></label><br>

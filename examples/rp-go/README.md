@@ -60,9 +60,9 @@ does not echo the password.
 
 ## Known limits
 
-- **No hosted login page yet.** This RP takes the user's password itself and sends it to `/auth/password`.
-  That is acceptable for a demo, and it is labelled as one on the page. A production RP redirects the user's
-  browser to the platform's login instead, and that page is still open work.
+- **The demo takes the password itself.** This RP sends the user's password to `/auth/password`, which shows the protocol.
+  A production RP sends the user's browser to the platform's hosted login page at `/login` instead, so the
+  password never reaches the RP. The page is labelled as a demo on the sign-in form.
 - **No way to create a password account over HTTP yet.** The password bridge stores accounts through
   `SetPassword`, which the tests call directly. A live demo needs an account seeded the same way.
 - **The key is a file on disk.** Store it with the same care as any other credential. The file is written
