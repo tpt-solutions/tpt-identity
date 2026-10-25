@@ -18,6 +18,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/tpt-solutions/tpt-identity/internal/resolver"
@@ -138,6 +139,14 @@ func (h *OID4VPHandler) verifyVPToken(vpToken string, req *OID4VPRequest) error 
 	if h.resolver == nil {
 		return errors.New("presentation verification is not configured")
 	}
+	if strings.HasPrefix(strings.TrimSpace(vpToken), "{") {
+		return h.verifyJSONVPToken(vpToken, req)
+	}
+	return h.verifyJWTVPToken(strings.TrimSpace(vpToken), req)
+}
+
+// verifyJSONVPToken checks a JSON-LD style presentation: the holder's embedded DataIntegrityProof.
+func (h *OID4VPHandler) verifyJSONVPToken(vpToken string, req *OID4VPRequest) error {
 	var vp vcpkg.VerifiablePresentation
 	if err := json.Unmarshal([]byte(vpToken), &vp); err != nil {
 		return fmt.Errorf("vp_token must be a JSON verifiable presentation: %w", err)

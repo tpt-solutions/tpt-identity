@@ -147,3 +147,59 @@ func TestPARRequestBoundToPushingClient(t *testing.T) {
 		t.Fatalf("other client redeemed the PAR request: %d %s", aw.Code, aw.Body.String())
 	}
 }
+
+// The front-channel call must name the pushed client. Without client_id the request is refused.
+func TestPARRequiresClientIDOnFrontChannel(t *testing.T) {
+	p, requestURI := pushPARRequest(t)
+
+	authz := httptest.NewRequest(http.MethodGet, "/authorize?request_uri="+url.QueryEscape(requestURI), nil)
+	aw := httptest.NewRecorder()
+	p.AuthorizeHandler(aw, authz)
+	if !strings.Contains(aw.Body.String(), "client_id is required") {
+		t.Fatalf("request_uri without client_id: want refusal, got %d %s", aw.Code, aw.Body.String())
+	}
+}
+
+// A mismatched client is refused without consuming the request, so the pushing client can still use it.
+func TestPARMismatchDoesNotBurnRequest(t *testing.T) {
+	p, requestURI := pushPARRequest(t)
+
+	wrong := httptest.NewRecorder()
+	p.AuthorizeHandler(wrong, httptest.NewRequest(http.MethodGet,
+		"/authorize?client_id=other-rp&request_uri="+url.QueryEscape(requestURI), nil))
+	if !strings.Contains(wrong.Body.String(), "client_id does not match") {
+		t.Fatalf("other client: want mismatch refusal, got %d %s", wrong.Code, wrong.Body.String())
+	}
+
+	right := httptest.NewRecorder()
+	p.AuthorizeHandler(right, httptest.NewRequest(http.MethodGet,
+		"/authorize?client_id=public-rp&request_uri="+url.QueryEscape(requestURI), nil))
+	if strings.Contains(right.Body.String(), "request_uri") || strings.Contains(right.Body.String(), "does not match") {
+		t.Fatalf("pushing client refused after a mismatch: %d %s", right.Code, right.Body.String())
+	}
+}
+
+// pushPARRequest pushes a PAR request as public-rp and returns the provider and the request_uri.
+func pushPARRequest(t *testing.T) (*oidc.Provider, string) {
+	t.Helper()
+	p, _, _ := introSetup(t)
+	push := url.Values{
+		"client_id":             {"public-rp"},
+		"redirect_uri":          {parRedirect},
+		"response_type":         {"code"},
+		"state":                 {"s1"},
+		"code_challenge":        {"E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"},
+		"code_challenge_method": {"S256"},
+	}
+	r := httptest.NewRequest(http.MethodPost, "/oidc/par", strings.NewReader(push.Encode()))
+	r.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	w := httptest.NewRecorder()
+	p.PARHandler(w, r)
+	var pushed struct {
+		RequestURI string `json:"request_uri"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &pushed); err != nil || pushed.RequestURI == "" {
+		t.Fatalf("PAR push: %d %s", w.Code, w.Body.String())
+	}
+	return p, pushed.RequestURI
+}

@@ -510,7 +510,7 @@ func (p *Provider) VerifyAccessToken(ctx context.Context, token string) (*Claims
 	if err != nil {
 		return nil, fmt.Errorf("jwt: subject not found")
 	}
-	if id.Role == "suspended" || id.Role == "deleted" {
+	if id.Role == "suspended" || id.Role == "deleted" || id.Role == "deactivated" {
 		return nil, fmt.Errorf("jwt: subject is not active")
 	}
 	return claims, nil
@@ -524,6 +524,9 @@ func (p *Provider) validateClientAuth(r *http.Request, clientID string) error {
 	}
 	if client.TokenEndpointAuthMethod == "none" {
 		return nil // public client, no secret required
+	}
+	if client.TokenEndpointAuthMethod == "private_key_jwt" {
+		return p.verifyClientAssertion(r.Context(), r, client)
 	}
 	// Check Authorization: Basic or client_secret form param.
 	var providedSecret string

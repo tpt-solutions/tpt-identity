@@ -1,7 +1,9 @@
 package oidc
 
 import (
+	"crypto/ed25519"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -20,7 +22,7 @@ import (
 const maxRegistrationBody = 64 << 10 // 64 KiB
 
 var (
-	allowedAuthMethods   = []string{"none", "client_secret_basic", "client_secret_post"}
+	allowedAuthMethods   = []string{"none", "client_secret_basic", "client_secret_post", "private_key_jwt"}
 	allowedGrantTypes    = []string{"authorization_code", "refresh_token", "client_credentials", "urn:ietf:params:oauth:grant-type:device_code"}
 	allowedResponseTypes = []string{"code"}
 )
@@ -35,6 +37,51 @@ type RegisterClientRequest struct {
 	Scope                   string   `json:"scope,omitempty"`
 	BackchannelLogoutURI    string   `json:"backchannel_logout_uri,omitempty"`
 	PostLogoutRedirectURIs  []string `json:"post_logout_redirect_uris,omitempty"`
+	// JWKS is the client's public key set, required for private_key_jwt and refused otherwise.
+	JWKS json.RawMessage `json:"jwks,omitempty"`
+}
+
+// clientJWK is one Ed25519 public key a client may sign its assertions with (RFC 8037 OKP).
+type clientJWK struct {
+	KTY string `json:"kty"`
+	CRV string `json:"crv"`
+	X   string `json:"x"`
+	KID string `json:"kid,omitempty"`
+}
+
+// canonicalClientJWKS checks a client's key set and returns it in canonical form for storage. Only
+// Ed25519 keys are accepted, because assertions are verified with EdDSA alone, and kids must be unique.
+func canonicalClientJWKS(raw json.RawMessage) (string, error) {
+	var set struct {
+		Keys []clientJWK `json:"keys"`
+	}
+	if err := json.Unmarshal(raw, &set); err != nil {
+		return "", fmt.Errorf("jwks: %w", err)
+	}
+	if len(set.Keys) == 0 {
+		return "", errors.New("jwks: at least one key is required")
+	}
+	kids := map[string]bool{}
+	for i, k := range set.Keys {
+		if k.KTY != "OKP" || k.CRV != "Ed25519" {
+			return "", fmt.Errorf("jwks: key %d must be an OKP Ed25519 key", i)
+		}
+		x, err := base64.RawURLEncoding.DecodeString(k.X)
+		if err != nil || len(x) != ed25519.PublicKeySize {
+			return "", fmt.Errorf("jwks: key %d has an invalid x value", i)
+		}
+		if k.KID != "" {
+			if kids[k.KID] {
+				return "", fmt.Errorf("jwks: kid %q appears twice", k.KID)
+			}
+			kids[k.KID] = true
+		}
+	}
+	out, err := json.Marshal(set)
+	if err != nil {
+		return "", err
+	}
+	return string(out), nil
 }
 
 // RegisterClientResponse is the RFC 7591 client registration response.
@@ -156,9 +203,25 @@ func (p *Provider) RegisterClientHandler(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	var jwks string
+	if authMethod == "private_key_jwt" {
+		if len(req.JWKS) == 0 {
+			writeError(w, "invalid_client_metadata", "private_key_jwt requires jwks")
+			return
+		}
+		jwks, err = canonicalClientJWKS(req.JWKS)
+		if err != nil {
+			writeError(w, "invalid_client_metadata", err.Error())
+			return
+		}
+	} else if len(req.JWKS) > 0 {
+		writeError(w, "invalid_client_metadata", "jwks is only allowed with token_endpoint_auth_method private_key_jwt")
+		return
+	}
+
 	var clientSecret string
 	var secretHash string
-	if authMethod != "none" {
+	if authMethod == "client_secret_basic" || authMethod == "client_secret_post" {
 		clientSecret, err = randomHex(32)
 		if err != nil {
 			http.Error(w, "internal error", http.StatusInternalServerError)
@@ -179,6 +242,7 @@ func (p *Provider) RegisterClientHandler(w http.ResponseWriter, r *http.Request)
 		BackchannelLogoutURI:    req.BackchannelLogoutURI,
 		PostLogoutRedirectURIs:  req.PostLogoutRedirectURIs,
 		CreatedAt:               time.Now(),
+		JWKS:                    jwks,
 	}
 	if err := p.store.SaveClient(r.Context(), client); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

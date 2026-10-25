@@ -72,7 +72,7 @@ func (p *Provider) DiscoveryHandler(w http.ResponseWriter, r *http.Request) {
 		SubjectTypesSupported:              []string{"public"},
 		IDTokenSigningAlgValuesSupported:   []string{"EdDSA"},
 		ScopesSupported:                    []string{"openid", "profile", "did"},
-		TokenEndpointAuthMethodsSupported:  []string{"client_secret_basic", "client_secret_post", "none"},
+		TokenEndpointAuthMethodsSupported:  []string{"client_secret_basic", "client_secret_post", "none", "private_key_jwt"},
 		ClaimsSupported:                    []string{"sub", "iss", "iat", "exp", "nonce", "did", "amr", "acr"},
 		GrantTypesSupported: []string{
 			"authorization_code",

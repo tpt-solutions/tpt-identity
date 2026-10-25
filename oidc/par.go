@@ -97,14 +97,20 @@ func (p *Provider) resolvePARRequest(r *http.Request, requestURI string) (map[st
 		_ = p.store.DeletePARRequest(r.Context(), requestURI)
 		return nil, fmt.Errorf("par: request_uri expired")
 	}
+	// RFC 9126 §4: the client that pushed the request must be the one that uses it. The client_id
+	// is required on the front-channel call and must match. The check runs before the request is
+	// consumed, so a mismatched caller cannot burn a request that belongs to another client.
+	supplied := r.URL.Query().Get("client_id")
+	if supplied == "" {
+		return nil, fmt.Errorf("par: client_id is required with request_uri")
+	}
+	if supplied != par.ClientID {
+		return nil, fmt.Errorf("par: client_id does not match the pushed request")
+	}
 	_ = p.store.DeletePARRequest(r.Context(), requestURI) // single-use
 	var params map[string]string
 	if err := json.Unmarshal([]byte(par.Params), &params); err != nil {
 		return nil, fmt.Errorf("par: malformed params")
-	}
-	// RFC 9126 §4: the client that pushed the request must be the one that uses it.
-	if supplied := r.URL.Query().Get("client_id"); supplied != "" && supplied != params["client_id"] {
-		return nil, fmt.Errorf("par: client_id does not match the pushed request")
 	}
 	return params, nil
 }
