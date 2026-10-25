@@ -15,6 +15,7 @@ import (
 
 	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
 	"github.com/tpt-solutions/tpt-identity/oidc"
+	"github.com/tpt-solutions/tpt-identity/pkg/consent"
 )
 
 // The login page is the browser sign-in the authorize endpoint sends a browser to when it has no session.
@@ -49,6 +50,8 @@ type loginView struct {
 	Passkey    bool
 	Device     bool
 	UserCode   string
+	Consent    bool
+	Scope      string
 	Message    string
 	Failed     bool
 	Done       bool
@@ -205,6 +208,16 @@ func (s *Server) handleLoginPasskeyFinish(w http.ResponseWriter, r *http.Request
 		return
 	}
 	redirect, device, err := s.loginNext(r, subjectDID, st, []string{"hwk", "user"})
+	var pending *consentRequired
+	if errors.As(err, &pending) {
+		next, cerr := s.consentURL(w, pending)
+		if cerr != nil {
+			writeLoginJSONError(w, http.StatusInternalServerError, "Something went wrong. Try again.")
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"redirect": next})
+		return
+	}
 	if err != nil {
 		writeLoginJSONError(w, loginStatus(err), err.Error())
 		return
@@ -282,8 +295,181 @@ func (s *Server) loginNext(r *http.Request, subjectDID string, st *bridgeState, 
 	if st.ClientID == "" || st.RedirectURI == "" {
 		return "", false, nil
 	}
+	// A client that is not first-party needs the user's consent for this scope before a code is issued.
+	client, err := s.store.GetClient(r.Context(), st.ClientID)
+	if err != nil {
+		return "", false, &loginError{http.StatusBadRequest, "unknown client_id"}
+	}
+	if !client.FirstParty {
+		given, err := s.consentGiven(r.Context(), subjectDID, st.ClientID, st.Scope)
+		if err != nil {
+			return "", false, &loginError{http.StatusInternalServerError, "consent check failed"}
+		}
+		if !given {
+			return "", false, &consentRequired{subject: subjectDID, st: st, amr: amr}
+		}
+	}
 	redirect, err = s.codeRedirect(r, subjectDID, st, amr)
 	return redirect, false, err
+}
+
+// consentRequired means the signed-in subject has not yet agreed to share with this client for this scope.
+type consentRequired struct {
+	subject string
+	st      *bridgeState
+	amr     []string
+}
+
+func (c *consentRequired) Error() string { return "consent required" }
+
+// consentScopeID is the grant scope for an OIDC scope string. Grants are keyed by client and by this scope, so a
+// change of scope asks again.
+func consentScopeID(scope string) string {
+	return "oidc:" + strings.Join(strings.Fields(scope), " ")
+}
+
+// consentGiven reports whether subjectDID has an unrevoked, unexpired grant to clientID for scope.
+func (s *Server) consentGiven(ctx context.Context, subjectDID, clientID, scope string) (bool, error) {
+	grants, err := s.store.ListGrants(ctx, subjectDID)
+	if err != nil {
+		return false, err
+	}
+	want := consentScopeID(scope)
+	now := time.Now()
+	for _, g := range grants {
+		if g.RelyingDID != clientID || g.ScopeID != want || g.RevokedAt != nil {
+			continue
+		}
+		if g.ExpiresAt == nil || now.Before(*g.ExpiresAt) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// consentURL starts the consent step for a pending sign-in. The step runs in this browser, so the transaction is
+// bound to it by a fresh cookie that is set on the response.
+func (s *Server) consentURL(w http.ResponseWriter, cr *consentRequired) (string, error) {
+	binding, err := randomHex(16)
+	if err != nil {
+		return "", err
+	}
+	token, err := s.signBridgeState(bridgeState{
+		ClientID:            cr.st.ClientID,
+		RedirectURI:         cr.st.RedirectURI,
+		Scope:               cr.st.Scope,
+		Nonce:               cr.st.Nonce,
+		OrigState:           cr.st.OrigState,
+		CodeChallenge:       cr.st.CodeChallenge,
+		CodeChallengeMethod: cr.st.CodeChallengeMethod,
+		Subject:             cr.subject,
+		AMR:                 cr.amr,
+		Binding:             binding,
+		CreatedAt:           time.Now().Unix(),
+	})
+	if err != nil {
+		return "", err
+	}
+	http.SetCookie(w, s.loginCookie(loginBindingCookie, binding, http.SameSiteLaxMode))
+	return "/login/consent?" + url.Values{"txn": {token}}.Encode(), nil
+}
+
+// consentTransaction checks a consent token and that this browser started it.
+func (s *Server) consentTransaction(r *http.Request, token string) (*bridgeState, error) {
+	st, err := s.verifyBridgeState(token)
+	if err != nil || st.Subject == "" {
+		return nil, &loginError{http.StatusBadRequest, "This consent request has expired. Start the sign-in again."}
+	}
+	c, err := r.Cookie(loginBindingCookie)
+	if err != nil || st.Binding == "" || subtle.ConstantTimeCompare([]byte(c.Value), []byte(st.Binding)) != 1 {
+		return nil, &loginError{http.StatusBadRequest, "This browser did not start this sign-in. Start again from the app that asked you to sign in."}
+	}
+	return st, nil
+}
+
+// handleConsentPage asks the signed-in user whether to share with the client. GET /login/consent?txn=...
+func (s *Server) handleConsentPage(w http.ResponseWriter, r *http.Request) {
+	loginHeaders(w)
+	txn := r.URL.Query().Get("txn")
+	st, err := s.consentTransaction(r, txn)
+	if err != nil {
+		renderLogin(w, http.StatusBadRequest, loginView{Failed: true, Message: err.Error()})
+		return
+	}
+	csrf, err := randomHex(16)
+	if err != nil {
+		renderLogin(w, http.StatusInternalServerError, loginView{Failed: true, Message: "Something went wrong. Try again."})
+		return
+	}
+	http.SetCookie(w, s.loginCookie(loginCSRFCookie, csrf, http.SameSiteStrictMode))
+	view := loginView{Txn: txn, CSRF: csrf, Consent: true, Scope: st.Scope, Heading: "Share your details?"}
+	if client, err := s.store.GetClient(r.Context(), st.ClientID); err == nil {
+		view.ClientName = client.ClientName
+	}
+	renderLogin(w, http.StatusOK, view)
+}
+
+// handleConsentDecision records the user's answer and returns the relying party redirect as JSON. The page's
+// script follows it: a form post that redirected to the relying party would be stopped by the page's CSP.
+// POST /login/consent
+func (s *Server) handleConsentDecision(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("Content-Type", "application/json")
+	if err := r.ParseForm(); err != nil {
+		writeLoginJSONError(w, http.StatusBadRequest, "The form could not be read.")
+		return
+	}
+	st, err := s.consentTransaction(r, r.PostFormValue("txn"))
+	if err != nil {
+		writeLoginJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	if !checkLoginCSRF(r, r.PostFormValue("csrf")) {
+		writeLoginJSONError(w, http.StatusForbidden, "The form has expired. Reload the page and try again.")
+		return
+	}
+	if err := s.checkClientRedirect(r.Context(), st.ClientID, st.RedirectURI); err != nil {
+		writeLoginJSONError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	params := map[string]string{}
+	if st.OrigState != "" {
+		params["state"] = st.OrigState
+	}
+	switch r.PostFormValue("decision") {
+	case "deny":
+		params["error"] = "access_denied"
+		params["error_description"] = "the user did not agree to share"
+		_ = json.NewEncoder(w).Encode(map[string]string{"redirect": oidc.AppendQuery(st.RedirectURI, params)})
+	case "allow":
+		grantID, err := randomHex(16)
+		if err != nil {
+			writeLoginJSONError(w, http.StatusInternalServerError, "The consent could not be recorded.")
+			return
+		}
+		grant := &consent.Grant{
+			ID:                  "grant_" + grantID,
+			SubjectDID:          st.Subject,
+			RelyingDID:          st.ClientID,
+			Level:               consent.GrantSchema,
+			ScopeID:             consentScopeID(st.Scope),
+			GrantedAt:           time.Now(),
+			ExplicitlyConfirmed: true,
+		}
+		if err := s.store.SaveGrant(r.Context(), grant); err != nil {
+			writeLoginJSONError(w, http.StatusInternalServerError, "The consent could not be recorded.")
+			return
+		}
+		redirect, err := s.codeRedirect(r, st.Subject, st, st.AMR)
+		if err != nil {
+			writeLoginJSONError(w, loginStatus(err), err.Error())
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]string{"redirect": redirect})
+	default:
+		writeLoginJSONError(w, http.StatusBadRequest, "Choose allow or deny.")
+	}
 }
 
 // codeRedirect issues an authorization code for subjectDID and returns the relying party redirect that carries

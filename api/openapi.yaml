@@ -3047,6 +3047,55 @@ paths:
           description: The transaction has expired or was started by another browser (HTML error page).
         "429":
           $ref: "#/components/responses/TooManyRequests"
+  /login/consent:
+    get:
+      tags: [Login]
+      operationId: loginConsentPage
+      summary: Ask the signed-in user whether to share with the client (HTML)
+      description: Reached after sign-in when the client is not first-party and the user has no grant for this client and scope. Needs the binding cookie from the sign-in.
+      parameters:
+        - name: txn
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The consent page.
+          content:
+            text/html:
+              schema: {type: string}
+        "400":
+          description: The consent request has expired, or this browser did not start it (HTML).
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+    post:
+      tags: [Login]
+      operationId: loginConsentDecision
+      summary: Record the user's allow or deny, and return the relying party redirect
+      description: Needs the binding cookie and the CSRF token. Allow records a grant for this client and scope, then returns the redirect with the code. Deny returns the redirect with error=access_denied. The page's script follows the redirect.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                txn: {type: string}
+                csrf: {type: string}
+                decision: {type: string, enum: [allow, deny]}
+      responses:
+        "200":
+          description: "{redirect} to follow."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JSONObject"
+        "400":
+          description: Expired consent request, wrong browser, or an unknown decision.
+        "403":
+          description: The CSRF token does not match.
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /login/magic:
     post:
       tags: [Login]

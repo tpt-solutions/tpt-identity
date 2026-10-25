@@ -377,6 +377,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /device/start", s.wrap(s.rateLimit(s.audit(s.handleDeviceStart))))
 	s.mux.HandleFunc("GET /login", s.wrap(s.rateLimit(s.audit(s.handleLoginPage))))
 	s.mux.HandleFunc("POST /login/magic", s.wrap(s.rateLimit(s.audit(s.handleLoginMagic))))
+	s.mux.HandleFunc("GET /login/consent", s.wrap(s.rateLimit(s.audit(s.handleConsentPage))))
+	s.mux.HandleFunc("POST /login/consent", s.wrap(s.rateLimit(s.audit(s.handleConsentDecision))))
 	s.mux.HandleFunc("POST /login/passkey/finish", s.wrap(s.rateLimit(s.audit(s.handleLoginPasskeyFinish))))
 	s.mux.HandleFunc("GET /login/static/{name}", s.wrap(s.audit(s.handleLoginAsset)))
 	// OID4VCI

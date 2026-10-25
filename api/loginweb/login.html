@@ -14,6 +14,17 @@
 {{- else if .Failed}}
   <h1>Sign in</h1>
   <p class="error" id="message">{{.Message}}</p>
+{{- else if .Consent}}
+  <h1>{{.Heading}}</h1>
+  <p>{{if .ClientName}}<strong>{{.ClientName}}</strong>{{else}}This app{{end}} wants to learn your identifier and asks for access with <code>{{.Scope}}</code>. You can revoke this later.</p>
+  <p class="error" id="message" hidden></p>
+  <form method="post" action="/login/consent" data-consent="1">
+    <input type="hidden" name="txn" value="{{.Txn}}">
+    <input type="hidden" name="csrf" value="{{.CSRF}}">
+    <button type="submit" name="decision" value="allow">Allow</button>
+    <button type="submit" name="decision" value="deny" class="secondary">Deny</button>
+  </form>
+  <noscript><p class="error">This step needs JavaScript. Enable it and reload the page.</p></noscript>
 {{- else}}
   <h1>{{if .Device}}Approve your device{{else}}Sign in{{end}}</h1>
   {{- if .ClientName}}<p>to continue to <strong>{{.ClientName}}</strong></p>{{end}}
@@ -45,7 +56,7 @@
   {{- end}}
 {{- end}}
 </main>
-{{- if and (not .Done) .Passkey}}
+{{- if not .Done}}
 <script src="/login/static/login.js" defer></script>
 {{- end}}
 </body>

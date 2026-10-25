@@ -8,6 +8,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -26,18 +27,20 @@ import (
 // ID across the external provider round-trip, without a server-side state table.
 
 type bridgeState struct {
-	ClientID            string `json:"client_id"`
-	RedirectURI         string `json:"redirect_uri"`
-	Scope               string `json:"scope"`
-	Nonce               string `json:"nonce"`
-	OrigState           string `json:"orig_state,omitempty"`
-	CodeChallenge       string `json:"code_challenge,omitempty"`
-	CodeChallengeMethod string `json:"code_challenge_method,omitempty"`
-	LinkFor             string `json:"link_for,omitempty"`         // non-empty = link to existing DID
-	AuthnRequestID      string `json:"authn_request_id,omitempty"` // SAML: anti-replay
-	Binding             string `json:"binding,omitempty"`          // must match the browser cookie on callback
-	DeviceUserCode      string `json:"device_user_code,omitempty"` // non-empty = approve this device request
-	CreatedAt           int64  `json:"created_at"`
+	ClientID            string   `json:"client_id"`
+	RedirectURI         string   `json:"redirect_uri"`
+	Scope               string   `json:"scope"`
+	Nonce               string   `json:"nonce"`
+	OrigState           string   `json:"orig_state,omitempty"`
+	CodeChallenge       string   `json:"code_challenge,omitempty"`
+	CodeChallengeMethod string   `json:"code_challenge_method,omitempty"`
+	LinkFor             string   `json:"link_for,omitempty"`         // non-empty = link to existing DID
+	AuthnRequestID      string   `json:"authn_request_id,omitempty"` // SAML: anti-replay
+	Binding             string   `json:"binding,omitempty"`          // must match the browser cookie on callback
+	DeviceUserCode      string   `json:"device_user_code,omitempty"` // non-empty = approve this device request
+	Subject             string   `json:"subject,omitempty"`          // non-empty = a consent step for this signed-in DID
+	AMR                 []string `json:"amr,omitempty"`              // the authentication methods, carried to the consent step
+	CreatedAt           int64    `json:"created_at"`
 }
 
 // bridgeStateCookie binds a bridge flow to the browser that started it.
@@ -658,6 +661,16 @@ func (s *Server) finishBridgeAuth(w http.ResponseWriter, r *http.Request, ext *b
 	// A device sign-in approves the device, and an OIDC sign-in returns the relying party redirect with a code.
 	// Both go through loginNext, which checks the client, redirect URI and PKCE before issuing anything.
 	redirect, device, err := s.loginNext(r, subjectDID, st, amr)
+	var pending *consentRequired
+	if errors.As(err, &pending) {
+		next, cerr := s.consentURL(w, pending)
+		if cerr != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		http.Redirect(w, r, next, http.StatusFound)
+		return
+	}
 	if err != nil {
 		http.Error(w, err.Error(), loginStatus(err))
 		return

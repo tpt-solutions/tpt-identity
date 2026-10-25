@@ -160,10 +160,7 @@ func TestLoginPageEndToEndWithMagicLink(t *testing.T) {
 		t.Fatal(err)
 	}
 	follow := do(t, srv, http.MethodGet, u.RequestURI(), "", nil)
-	back := follow.Header().Get("Location")
-	if follow.Code != http.StatusFound || !strings.HasPrefix(back, loginRedirect+"?") {
-		t.Fatalf("follow link: want a redirect to the relying party, got %d %q", follow.Code, back)
-	}
+	back := consentStep(t, srv, follow, "allow")
 	bu, _ := url.Parse(back)
 	if bu.Query().Get("state") != "rp-state" {
 		t.Errorf("state not returned: %q", bu.Query().Get("state"))
