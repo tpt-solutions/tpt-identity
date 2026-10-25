@@ -110,7 +110,7 @@ Schemas marked `ExtraSensitive: true` (mental-health, addiction, criminal-record
 
 ### Persistence
 
-`internal/store/store.go` defines the `Store` interface; `internal/store/sqlite.go` is the only implementation. The SQLite schema is built by the embedded migrations in `internal/store/migrations/*.sql`. `OpenSQLite` runs them, so a database is current when the store opens, and `tpt-identity migrate up` runs the same ones. Migration 004 is the complete schema, and its Go hook (`reconcileColumns`) adds columns that older shapes lack. Migrations 001-003 are history: their shapes differ, so only 004 is authoritative. The readiness probe fails when the applied version is behind. PostgreSQL still builds its schema inline (`pgSchema`) and keeps no version record, because the runner is SQLite-only. All list/get operations use the context for cancellation. `OIDCSession` stores PKCE challenge, state, user-agent, IP, and refresh token hash alongside the auth code.
+`internal/store/store.go` defines the `Store` interface. `internal/store/sqlite.go` and `internal/store/postgres.go` both implement it through the same query code (`dialect.go`). Migrations live in `internal/store/migrations/`: the top-level `*.sql` files are SQLite, and `pg/*.sql` are PostgreSQL. `migrations.UpFor(db, dialect)` applies the set for the dialect, and records each version in `schema_migrations`. `OpenSQLite` runs the SQLite set on open, and `tpt-identity migrate up` runs it for either database. PostgreSQL migrations take an advisory lock, and the record table is created under that lock. Only `migrate down` is SQLite-only. For SQLite, migration 004 is the complete schema, and its Go hook (`reconcileColumns`) adds columns that older shapes lack. Migrations 001-003 are history. The readiness probe fails when the applied version is behind. Add a PostgreSQL change as a new `pg/NNN_*.sql` file and, if SQLite needs it too, a matching top-level file. All list/get operations use the context for cancellation. `OIDCSession` stores PKCE challenge, state, user-agent, IP, and refresh token hash alongside the auth code.
 
 ### Consent and receipts
 
@@ -210,6 +210,8 @@ TTL is **15 minutes** (hardcoded in `internal/bridge/providers/magiclink.go`). T
 - **`ValidFor < 0` in `vc.Issue` / `IssueReputationVC`** — negative values set an already-expired `ValidUntil` (useful for tests). Zero means no expiry. Both `vc.Issue` and `trust.IssueReputationVC` handle this identically.
 
 ## Configuration
+
+To try the platform locally without configuration, run `serve --demo`. It creates `./tpt-demo` on first run, listens on 127.0.0.1:8080 only, prints sign-in emails to the console instead of sending them, and serves a built-in relying party at `/demo` (`cmd/tpt-identity/cmd/demo.go`). Demo mode is not for production.
 
 Copy `config.yaml.example` to `config.yaml`. Key fields: `issuer` (canonical HTTPS URL, used as OIDC issuer and `did:web` base), `identity.signing_key` (path to Ed25519 PEM), `identity.passphrase` (Argon2id key derivation), `api_key` (Bearer token for protected admin endpoints). Bridge providers are configured under `bridges.oidc[]`. TOTP uses `totp_passphrase` (defaults to `identity.passphrase`). Environment variable override prefix: `TPT_IDENTITY_`.
 

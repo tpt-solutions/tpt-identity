@@ -30,6 +30,10 @@ All notable changes to this project are documented here. The format follows [Kee
 - Audit log hash version 2 covers the recorded time. Rows written before this change still verify.
 - `pe.Evaluate` requires a credential verifier. A credential that fails verification never matches.
 - `examples/rp-go`: a relying party that runs the PKCE flow with private_key_jwt, checks the ID token, and reads userinfo. It has integration tests against a live in-process platform.
+- `examples/age-verifier`: an age-over-N check on SD-JWT. The issuer checks the date of birth and signs only the threshold and the result. The holder discloses those two claims with a key-binding JWT. The verifier accepts only trusted issuers, a proof at its threshold, and a presentation bound to its nonce and audience.
+- `tpt-identity serve --demo`: a throwaway local platform on 127.0.0.1:8080. Sign-in emails are printed, not sent. A built-in relying party at `/demo` signs a user in through the real flow and verifies the ID token. Configuration is kept in `./tpt-demo`.
+- `api.Server.Mount` registers an extra handler beside the API.
+- Versioned PostgreSQL migrations: `tpt-identity migrate up` and `version` work on a `postgres://` database, and `/readyz` reports a schema behind the build. The schema lives in `internal/store/migrations/pg/`.
 
 ### Changed
 
@@ -51,6 +55,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Fixed
 
+- SD-JWT key-bound presentations never verified. The KB-JWT's `sd_hash` was computed without the trailing `~`, while the verifier hashes the presentation with it, as the spec does. A holder-bound credential could be presented but not accepted.
 - `tpt-identity migrate` opened `database.path`, a key the server never reads, so it inspected a different file from the one the server used. It now uses `db_path`.
 - `tpt-identity version` and `config` were registered twice on the root command.
 - did:web: a resolved document must name the requested DID; a percent-encoded port is accepted; the allowlist matches the host without the port.
