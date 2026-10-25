@@ -2,6 +2,7 @@ package did
 
 import (
 	"context"
+	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -145,7 +146,10 @@ func (w *webMethod) Create(opts CreateOptions) (string, *Document, error) {
 	did := "did:web:" + opts.Domain
 	now := time.Now().UTC()
 
-	sigKeyID := did + "#signing-key-1"
+	sigKeyID := opts.SigningKeyID
+	if sigKeyID == "" {
+		sigKeyID = did + "#signing-key-1"
+	}
 	sigPubMB, err := toMultibase(opts.SigningPub, 0xed) // ed25519-pub multicodec
 	if err != nil {
 		return "", nil, err
@@ -164,6 +168,25 @@ func (w *webMethod) Create(opts CreateOptions) (string, *Document, error) {
 		}},
 		Authentication:  []string{sigKeyID},
 		AssertionMethod: []string{sigKeyID},
+	}
+
+	for _, old := range opts.RetiredKeys {
+		if old.ID == "" || old.ID == sigKeyID {
+			return "", nil, fmt.Errorf("did:web: retired key needs an ID distinct from the current signing key")
+		}
+		if len(old.Pub) != ed25519.PublicKeySize {
+			return "", nil, fmt.Errorf("did:web: retired key %s is not an Ed25519 public key", old.ID)
+		}
+		oldMB, err := toMultibase(old.Pub, 0xed)
+		if err != nil {
+			return "", nil, err
+		}
+		doc.VerificationMethod = append(doc.VerificationMethod, VerificationMethod{
+			ID:                 old.ID,
+			Type:               "Ed25519VerificationKey2020",
+			Controller:         did,
+			PublicKeyMultibase: &oldMB,
+		})
 	}
 
 	if len(opts.EncPub) > 0 {

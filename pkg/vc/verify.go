@@ -220,3 +220,10 @@ func decodeUvarint(b []byte) (uint64, int) {
 	}
 	return 0, 0
 }
+
+// Ed25519KeyFromDocument returns the Ed25519 public key that vmID names in doc. It refuses a revoked
+// key, a key of another type, and a verification method that is absent. Other packages use it to
+// check signatures made with a DID's keys.
+func Ed25519KeyFromDocument(doc *did.Document, vmID string) (ed25519.PublicKey, error) {
+	return extractEd25519Key(doc, vmID)
+}

@@ -181,6 +181,25 @@ type SDJWTIssueOptions struct {
 	// assurance level, or a cnf key-binding claim.
 	AlwaysVisibleClaims map[string]any
 	ValidFor            time.Duration
+	// ID is the credential's jti claim. The issuer uses it to revoke the credential.
+	ID string
+	// Status points the credential at its entry in a token status list (IETF Token Status List).
+	Status *SDJWTStatus
+}
+
+// SDJWTStatus is the status reference embedded as the "status" claim.
+type SDJWTStatus struct {
+	// ListURI is the URI of the token status list (a statuslist+jwt) that holds this credential's bit.
+	ListURI string
+	// Index is the credential's bit position in that list.
+	Index int
+}
+
+// issuerOwnedClaims are set by the issuer. A caller may not supply them as always-visible claims: a
+// caller that could set iss or sub would make the platform sign a token that names someone else.
+var issuerOwnedClaims = map[string]bool{
+	"iss": true, "sub": true, "iat": true, "exp": true, "nbf": true,
+	"_sd": true, "_sd_alg": true, "vct": true, "jti": true, "status": true,
 }
 
 // IssueSDJWT creates a signed SD-JWT credential.
@@ -239,7 +258,18 @@ func IssueSDJWT(opts SDJWTIssueOptions) (*SDJWTToken, error) {
 		payload["vct"] = s.VersionedID()
 	}
 	for k, v := range opts.AlwaysVisibleClaims {
+		if issuerOwnedClaims[k] {
+			return nil, fmt.Errorf("sdjwt: %q is set by the issuer and cannot be an always-visible claim", k)
+		}
 		payload[k] = v
+	}
+	if opts.ID != "" {
+		payload["jti"] = opts.ID
+	}
+	if opts.Status != nil {
+		payload["status"] = map[string]any{
+			"status_list": map[string]any{"idx": opts.Status.Index, "uri": opts.Status.ListURI},
+		}
 	}
 
 	jwt, err := signSDJWT(payload, opts.IssuerKey, opts.VerificationMethodID, "vc+sd-jwt")

@@ -156,6 +156,28 @@ func packEnvelope(msg []byte, recipients []Recipient, senderKID string, senderPr
 		return nil, fmt.Errorf("didcomm: gen cek: %w", err)
 	}
 
+	// Encrypt the content before wrapping the CEK. ECDH-1PU feeds the content tag into every
+	// recipient's KEK, so the tag must exist first.
+	aead, err := chacha20poly1305.NewX(cek[:])
+	if err != nil {
+		return nil, fmt.Errorf("didcomm: xchacha20: %w", err)
+	}
+	var iv [chacha20poly1305.NonceSizeX]byte
+	if _, err := io.ReadFull(rand.Reader, iv[:]); err != nil {
+		return nil, fmt.Errorf("didcomm: gen iv: %w", err)
+	}
+	// AAD is the base64url-encoded protected header (per JWE spec).
+	aad := []byte(protB64)
+	sealed := aead.Seal(nil, iv[:], msg, aad)
+	tagOff := len(sealed) - aead.Overhead()
+	ciphertext, contentTag := sealed[:tagOff], sealed[tagOff:]
+
+	// SuppPrivInfo for ECDH-1PU is the content tag. Anoncrypt has none.
+	var suppPriv []byte
+	if isAuthcrypt {
+		suppPriv = contentTag
+	}
+
 	// Per-recipient: generate ephemeral keypair, derive KEK, wrap CEK.
 	jweRecipients := make([]jweRecip, len(recipients))
 	for i, r := range recipients {
@@ -166,7 +188,7 @@ func packEnvelope(msg []byte, recipients []Recipient, senderKID string, senderPr
 
 		var kek [32]byte
 		if isAuthcrypt {
-			kek, err = ecdh1PUKEKSender(ephPriv, *senderPriv, r.PubKey, alg, hdr.APU, apvB64)
+			kek, err = ecdh1PUKEKSender(ephPriv, *senderPriv, r.PubKey, alg, hdr.APU, apvB64, suppPriv)
 		} else {
 			kek, err = ecdhESKEKSender(ephPriv, r.PubKey, alg, apvB64)
 		}
@@ -192,26 +214,12 @@ func packEnvelope(msg []byte, recipients []Recipient, senderKID string, senderPr
 		}
 	}
 
-	// Encrypt with XC20P (XChaCha20-Poly1305, 192-bit nonce).
-	aead, err := chacha20poly1305.NewX(cek[:])
-	if err != nil {
-		return nil, fmt.Errorf("didcomm: xchacha20: %w", err)
-	}
-	var iv [chacha20poly1305.NonceSizeX]byte
-	if _, err := io.ReadFull(rand.Reader, iv[:]); err != nil {
-		return nil, fmt.Errorf("didcomm: gen iv: %w", err)
-	}
-	// AAD is the base64url-encoded protected header (per JWE spec).
-	aad := []byte(protB64)
-	sealed := aead.Seal(nil, iv[:], msg, aad)
-	tagOff := len(sealed) - aead.Overhead()
-
 	return json.Marshal(Envelope{
 		Protected:  protB64,
 		Recipients: jweRecipients,
 		IV:         base64.RawURLEncoding.EncodeToString(iv[:]),
-		Ciphertext: base64.RawURLEncoding.EncodeToString(sealed[:tagOff]),
-		Tag:        base64.RawURLEncoding.EncodeToString(sealed[tagOff:]),
+		Ciphertext: base64.RawURLEncoding.EncodeToString(ciphertext),
+		Tag:        base64.RawURLEncoding.EncodeToString(contentTag),
 	})
 }
 
@@ -255,6 +263,12 @@ func Unpack(
 		}
 	}
 
+	// ECDH-1PU derives every KEK from the content tag, so decode it before unwrapping.
+	tagBytes, err := base64.RawURLEncoding.DecodeString(env.Tag)
+	if err != nil {
+		return nil, "", fmt.Errorf("didcomm: decode tag: %w", err)
+	}
+
 	// Find a recipient whose key we hold and unwrap the CEK.
 	var cek [32]byte
 	unwrapped := false
@@ -278,7 +292,7 @@ func Unpack(
 		case algAnoncrypt:
 			kek, err = ecdhESKEKRecipient(recipPriv, ephPub, hdr.Alg, hdr.APV)
 		case algAuthcrypt:
-			kek, err = ecdh1PUKEKRecipient(ephPub, recipPriv, senderPub, hdr.Alg, hdr.APU, hdr.APV)
+			kek, err = ecdh1PUKEKRecipient(ephPub, recipPriv, senderPub, hdr.Alg, hdr.APU, hdr.APV, tagBytes)
 		default:
 			continue
 		}
@@ -314,10 +328,6 @@ func Unpack(
 	if err != nil {
 		return nil, "", fmt.Errorf("didcomm: decode ciphertext: %w", err)
 	}
-	tagBytes, err := base64.RawURLEncoding.DecodeString(env.Tag)
-	if err != nil {
-		return nil, "", fmt.Errorf("didcomm: decode tag: %w", err)
-	}
 
 	aead, err := chacha20poly1305.NewX(cek[:])
 	if err != nil {
@@ -339,7 +349,7 @@ func ecdhESKEKSender(ephPriv [32]byte, recipPub [32]byte, alg, apvB64 string) ([
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return concatKDF(z, alg, "", apvB64)
+	return concatKDF(z, alg, "", apvB64, nil)
 }
 
 func ecdhESKEKRecipient(recipPriv [32]byte, ephPub [32]byte, alg, apvB64 string) ([32]byte, error) {
@@ -347,10 +357,12 @@ func ecdhESKEKRecipient(recipPriv [32]byte, ephPub [32]byte, alg, apvB64 string)
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return concatKDF(z, alg, "", apvB64)
+	return concatKDF(z, alg, "", apvB64, nil)
 }
 
-func ecdh1PUKEKSender(ephPriv, senderPriv [32]byte, recipPub [32]byte, alg, apuB64, apvB64 string) ([32]byte, error) {
+// ecdh1PUKEKSender derives the ECDH-1PU KEK. contentTag is the content-encryption tag, which goes into
+// the KDF as SuppPrivInfo, so the key wrap is bound to the ciphertext.
+func ecdh1PUKEKSender(ephPriv, senderPriv [32]byte, recipPub [32]byte, alg, apuB64, apvB64 string, contentTag []byte) ([32]byte, error) {
 	ze, err := curve25519.X25519(ephPriv[:], recipPub[:])
 	if err != nil {
 		return [32]byte{}, err
@@ -359,10 +371,10 @@ func ecdh1PUKEKSender(ephPriv, senderPriv [32]byte, recipPub [32]byte, alg, apuB
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return concatKDF(append(ze, zs...), alg, apuB64, apvB64)
+	return concatKDF(append(ze, zs...), alg, apuB64, apvB64, contentTag)
 }
 
-func ecdh1PUKEKRecipient(ephPub, recipPriv, senderPub [32]byte, alg, apuB64, apvB64 string) ([32]byte, error) {
+func ecdh1PUKEKRecipient(ephPub, recipPriv, senderPub [32]byte, alg, apuB64, apvB64 string, contentTag []byte) ([32]byte, error) {
 	ze, err := curve25519.X25519(recipPriv[:], ephPub[:])
 	if err != nil {
 		return [32]byte{}, err
@@ -371,14 +383,16 @@ func ecdh1PUKEKRecipient(ephPub, recipPriv, senderPub [32]byte, alg, apuB64, apv
 	if err != nil {
 		return [32]byte{}, err
 	}
-	return concatKDF(append(ze, zs...), alg, apuB64, apvB64)
+	return concatKDF(append(ze, zs...), alg, apuB64, apvB64, contentTag)
 }
 
 // --- Concat KDF (NIST SP 800-56A §5.8.1 / RFC 7518 §4.6.2) ---
 
 // concatKDF derives a 256-bit KEK from the shared secret z using one SHA-256 round.
-// apuB64 and apvB64 are the base64url-encoded party info values from the JWE header.
-func concatKDF(z []byte, alg, apuB64, apvB64 string) ([32]byte, error) {
+// apuB64 and apvB64 are the base64url-encoded party info values from the JWE header. suppPriv is
+// the SuppPrivInfo field: the content tag for ECDH-1PU, nil for ECDH-ES. With nil the output is the
+// plain ECDH-ES derivation.
+func concatKDF(z []byte, alg, apuB64, apvB64 string, suppPriv []byte) ([32]byte, error) {
 	var apu, apv []byte
 	if apuB64 != "" {
 		var err error
@@ -406,6 +420,7 @@ func concatKDF(z []byte, alg, apuB64, apvB64 string) ([32]byte, error) {
 	h = binary.BigEndian.AppendUint32(h, uint32(len(apv)))
 	h = append(h, apv...)
 	h = binary.BigEndian.AppendUint32(h, 256) // keydatalen in bits
+	h = append(h, suppPriv...)                // SuppPrivInfo: the content tag for ECDH-1PU
 
 	return sha256.Sum256(h), nil
 }

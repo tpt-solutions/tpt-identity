@@ -14,6 +14,19 @@ type CreateOptions struct {
 	SigningPub []byte
 	// EncPub is the raw X25519 public key bytes (optional).
 	EncPub []byte
+	// SigningKeyID is the verification method ID of the signing key. did:web uses it. It defaults to
+	// "<did>#signing-key-1".
+	SigningKeyID string
+	// RetiredKeys are earlier signing keys (did:web only). They stay in the document as verification
+	// methods, so proofs they made still verify. They are not listed as authentication or assertion
+	// methods, so they cannot sign anything new.
+	RetiredKeys []RetiredKey
+}
+
+// RetiredKey is an earlier signing key kept in a DID document after rotation.
+type RetiredKey struct {
+	ID  string
+	Pub []byte // raw Ed25519 public key bytes
 }
 
 // Method is the interface every DID method must implement.

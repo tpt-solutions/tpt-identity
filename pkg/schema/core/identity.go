@@ -73,7 +73,7 @@ func init() {
 				{Name: "givenNames", Type: "string"},
 				{Name: "familyName", Type: "string"},
 			}},
-		// Derived ZK-style age-over credential — issued by tpt-identity when given a verified DOB VC.
+		// Issuer-attested age-over credential (not zero-knowledge: the issuer reads the DOB) — issued by tpt-identity when given a verified DOB VC.
 		// The actual DOB is never included; only the binary result is signed.
 		{ID: "identity.age-over-proof", CategoryID: "identity", Name: "Age Over Proof", Source: schema.SourceCore,
 			Description: "Cryptographically signed assertion that the subject is at least N years old, without revealing the actual date of birth",

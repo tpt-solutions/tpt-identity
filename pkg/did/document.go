@@ -21,6 +21,9 @@ type Document struct {
 	Service            []Service            `json:"service,omitempty"`
 	Created            *time.Time           `json:"created,omitempty"`
 	Updated            *time.Time           `json:"updated,omitempty"`
+	// Deactivated is set on the document of a deactivated DID. Such a document carries no keys, and
+	// the DID can never be reactivated (the DID Core deactivation metadata, carried inline here).
+	Deactivated bool `json:"deactivated,omitempty"`
 }
 
 // VerificationMethod describes a cryptographic key in a DID Document.

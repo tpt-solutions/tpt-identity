@@ -1,9 +1,10 @@
 package vc
 
-// Zero-knowledge age proof for tpt-identity.
+// Issuer-attested age-over-N credential for tpt-identity. It is NOT zero-knowledge.
 //
-// Implements a practical "age-over-N" proof using a derived credential pattern
-// (not full ZK-SNARKs). The approach:
+// The issuer reads the date of birth from a verified credential and signs an "age-over-N" result.
+// A verifier learns only the age-over claim, but it must trust the issuer, which sees the date of
+// birth. No cryptographic hiding is involved. The approach:
 //
 //  1. The user holds a VC containing their date_of_birth (DOB).
 //  2. The prover requests an "age-over-N" assertion from the issuer.
