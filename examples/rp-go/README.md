@@ -42,6 +42,7 @@ does not echo the password.
      --data @registration.json
    ```
 
+   The body marks the client `first_party`, because the operator runs it, so its users are not asked to consent.
    The response carries a `client_id` and no secret, because the client authenticates with its key. Keep
    the `client_id`.
 

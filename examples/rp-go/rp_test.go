@@ -82,6 +82,7 @@ func newFixture(t *testing.T) *fixture {
 		ClientName:              "rp-go",
 		RedirectURIs:            []string{testRedirect},
 		TokenEndpointAuthMethod: "private_key_jwt",
+		FirstParty:              true,
 		GrantTypes:              []string{"authorization_code"},
 		ResponseTypes:           []string{"code"},
 		JWKS:                    string(jwks),

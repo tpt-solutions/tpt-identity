@@ -201,6 +201,7 @@ func registrationBody(key ed25519.PrivateKey, kid, name, redirectURI string) (st
 		"client_name":                name,
 		"redirect_uris":              []string{redirectURI},
 		"token_endpoint_auth_method": "private_key_jwt",
+		"first_party":                true,
 		"grant_types":                []string{"authorization_code"},
 		"response_types":             []string{"code"},
 		"jwks": map[string]any{"keys": []map[string]string{{
