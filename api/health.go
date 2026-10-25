@@ -3,13 +3,10 @@ package api
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/tpt-solutions/tpt-identity/internal/store"
 )
 
 // handleReadiness checks that the server can serve traffic: the DB must be reachable.
@@ -40,20 +37,14 @@ func (s *Server) handleReadiness(w http.ResponseWriter, r *http.Request) {
 
 	// The schema must be at the version this build expects. A database behind it runs queries that
 	// name columns it lacks, so the server is not ready until `tpt-identity migrate up` has run.
-	switch applied, err := s.store.SchemaVersion(ctx); {
-	case errors.Is(err, store.ErrSchemaVersionUnsupported):
-		result.Checks["schema"] = check{OK: true, Error: "version not tracked on this backend"}
-	case err != nil:
+	if applied, latest, err := s.store.SchemaVersion(ctx); err != nil {
 		result.Checks["schema"] = check{OK: false, Error: err.Error()}
 		result.Status = "degraded"
-	default:
-		latest, lerr := store.LatestSchemaVersion()
-		if lerr != nil || applied < latest {
-			result.Checks["schema"] = check{OK: false, Error: fmt.Sprintf("schema at version %d, server needs %d", applied, latest)}
-			result.Status = "degraded"
-		} else {
-			result.Checks["schema"] = check{OK: true}
-		}
+	} else if applied < latest {
+		result.Checks["schema"] = check{OK: false, Error: fmt.Sprintf("schema at version %d, server needs %d", applied, latest)}
+		result.Status = "degraded"
+	} else {
+		result.Checks["schema"] = check{OK: true}
 	}
 
 	// Without the platform signing key the server cannot issue or verify anything.

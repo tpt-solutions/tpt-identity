@@ -21,7 +21,7 @@ func TestMigrateUsesConfigFileDatabase(t *testing.T) {
 	cfgFile = cfgPath
 	t.Cleanup(func() { cfgFile = prev })
 
-	db, err := openMigrationDB()
+	db, _, err := openMigrationDB()
 	if err != nil {
 		t.Fatalf("open migration database: %v", err)
 	}
@@ -39,7 +39,7 @@ func TestMigrateRefusesMissingConfig(t *testing.T) {
 	prev := cfgFile
 	cfgFile = filepath.Join(t.TempDir(), "absent.yaml")
 	t.Cleanup(func() { cfgFile = prev })
-	if _, err := openMigrationDB(); err == nil {
+	if _, _, err := openMigrationDB(); err == nil {
 		t.Error("missing config accepted")
 	}
 }

@@ -212,9 +212,8 @@ type Store interface {
 	GetCredentialOffer(ctx context.Context, id string) (*CredentialOffer, error)
 	MarkCredentialOfferUsed(ctx context.Context, id string) error
 
-	// SchemaVersion returns the migration version the database has applied. It returns
-	// ErrSchemaVersionUnsupported on a backend that does not track one.
-	SchemaVersion(ctx context.Context) (int, error)
+	// SchemaVersion returns the migration version the database has applied, and the version this build expects.
+	SchemaVersion(ctx context.Context) (applied, latest int, err error)
 
 	// Close releases resources.
 	Close() error

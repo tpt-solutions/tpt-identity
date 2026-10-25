@@ -1,6 +1,7 @@
 package api_test
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"net/http"
@@ -61,7 +62,7 @@ func TestReadinessChecksSchemaVersion(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer raw.Close()
-	latest, err := store.LatestSchemaVersion()
+	_, latest, err := st.SchemaVersion(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
