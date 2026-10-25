@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/tpt-solutions/tpt-identity/internal/store"
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
@@ -40,6 +41,8 @@ type disclosureView struct {
 }
 
 type issueSDJWTResponse struct {
+	// ID is the credential's jti. Revoke the credential with POST /api/v1/credentials/sd-jwt/{id}/revoke.
+	ID          string           `json:"id,omitempty"`
 	JWT         string           `json:"jwt"`
 	Disclosures []disclosureView `json:"disclosures"`
 	// Serialized is only present when return_format is "serialized".
@@ -83,7 +86,8 @@ func (s *Server) handleIssueSDJWT(w http.ResponseWriter, r *http.Request) {
 		validFor = 24 * time.Hour
 	}
 
-	token, err := vc.IssueSDJWT(vc.SDJWTIssueOptions{
+	// Every credential the platform issues gets a bit in a token status list, so it can be revoked.
+	opts := vc.SDJWTIssueOptions{
 		IssuerDID:            issuerDID,
 		IssuerKey:            s.signingKey,
 		VerificationMethodID: s.signingKeyID,
@@ -92,13 +96,46 @@ func (s *Server) handleIssueSDJWT(w http.ResponseWriter, r *http.Request) {
 		SelectiveClaims:      req.SelectiveClaims,
 		AlwaysVisibleClaims:  req.AlwaysVisibleClaims,
 		ValidFor:             validFor,
-	})
+	}
+	var listID string
+	var statusIndex int
+	if issuerDID == s.platformDID {
+		listURL, idx, err := s.allocateStatus(r.Context())
+		if err != nil {
+			http.Error(w, "status entry: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+		listID, statusIndex = listURL, idx
+		id, err := randomSDJWTID()
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		opts.ID = id
+		opts.Status = &vc.SDJWTStatus{ListURI: s.tokenStatusURI(listURL), Index: idx}
+	}
+	token, err := vc.IssueSDJWT(opts)
 	if err != nil {
 		http.Error(w, "issue sd-jwt: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if opts.ID != "" {
+		now := time.Now()
+		if err := s.store.SaveSDJWTIssued(r.Context(), &store.SDJWTIssued{
+			ID:          opts.ID,
+			SubjectDID:  req.SubjectDID,
+			StatusList:  listID,
+			StatusIndex: statusIndex,
+			IssuedAt:    now,
+			ExpiresAt:   now.Add(validFor),
+		}); err != nil {
+			http.Error(w, "record sd-jwt: "+err.Error(), http.StatusInternalServerError)
+			return
+		}
+	}
 
 	resp := issueSDJWTResponse{
+		ID:          opts.ID,
 		JWT:         token.JWT,
 		Disclosures: make([]disclosureView, 0, len(token.Disclosures)),
 	}
@@ -163,6 +200,9 @@ func (s *Server) handleVerifySDJWT(w http.ResponseWriter, r *http.Request) {
 
 	verifier := vc.NewSDJWTVerifier(s.resolver)
 	result, err := verifier.Verify(req.Token, req.ExpectedNonce, req.ExpectedAudience)
+	if err == nil {
+		err = s.checkSDJWTStatus(r.Context(), result.AlwaysClaims)
+	}
 	if err != nil {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnprocessableEntity)

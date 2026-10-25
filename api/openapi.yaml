@@ -1668,6 +1668,26 @@ paths:
               schema:
                 type: string
 
+  /api/v1/token-status/{listId}:
+    get:
+      tags: [Credentials]
+      operationId: getTokenStatusList
+      summary: IETF Token Status List for SD-JWT credentials (signed statuslist+jwt)
+      parameters:
+        - name: listId
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The status list as a statuslist+jwt, signed by the platform key.
+          content:
+            application/statuslist+jwt:
+              schema: {type: string}
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /api/v1/status/{listId}:
     get:
       tags: [Credentials]
@@ -2097,6 +2117,29 @@ paths:
           $ref: "#/components/responses/BadRequest"
         "401":
           $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /api/v1/credentials/sd-jwt/{id}/revoke:
+    post:
+      tags: [Credentials]
+      operationId: revokeSDJWTCredential
+      summary: Revoke an SD-JWT credential this server issued, by its id (jti)
+      security:
+        - apiKey: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: {type: string}
+      responses:
+        "204":
+          description: Revoked. Verifiers see the bit set on the next status-list fetch.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "409":
+          description: The credential's status list is not hosted by this issuer.
         "429":
           $ref: "#/components/responses/TooManyRequests"
   /api/v1/credentials/sd-jwt/verify:
@@ -2982,6 +3025,36 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
 
   # ── Admin ────────────────────────────────────────────────────────────────
+  /admin/v1/didcomm/inbox:
+    get:
+      tags: [Admin]
+      operationId: adminListDIDCommInbox
+      summary: List DIDComm messages kept by the server, newest first
+      security:
+        - apiKey: []
+      parameters:
+        - name: limit
+          in: query
+          schema: {type: integer, minimum: 1, maximum: 500, default: 100}
+        - name: offset
+          in: query
+          schema: {type: integer, minimum: 0, default: 0}
+      responses:
+        "200":
+          description: Kept messages. Nothing acts on them automatically.
+          headers:
+            X-Total-Count:
+              schema: {type: integer}
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/JSONObject"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /admin/v1/identities:
     get:
       tags: [Admin]
@@ -3032,6 +3105,24 @@ paths:
       responses:
         "204":
           description: Unsuspended.
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /admin/v1/identities/{did}/deactivate:
+    post:
+      tags: [Admin]
+      operationId: adminDeactivateIdentity
+      summary: Permanently deactivate a DID; it resolves with no keys and cannot be reactivated
+      security:
+        - apiKey: []
+      parameters:
+        - $ref: "#/components/parameters/Did"
+      responses:
+        "204":
+          description: Deactivated (repeating the call is harmless).
         "401":
           $ref: "#/components/responses/Unauthorized"
         "404":

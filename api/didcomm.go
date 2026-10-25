@@ -82,6 +82,11 @@ func (s *Server) handleDIDCommReceive(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusBadRequest, "invalid_message", "message id is required for replay protection")
 		return
 	}
+	// Refused before the replay record, so a refused message does not use up its id.
+	if !s.didcommTypes[msg.Type] {
+		writeJSONError(w, http.StatusUnprocessableEntity, "unsupported_type", "this message type is not accepted by this server")
+		return
+	}
 	if msg.ExpiresTime != 0 && now.Unix() > msg.ExpiresTime {
 		writeJSONError(w, http.StatusBadRequest, "message_expired", "message expires_time has passed")
 		return
@@ -113,6 +118,18 @@ func (s *Server) handleDIDCommReceive(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		writeJSONError(w, http.StatusInternalServerError, "store_error", "could not record the message")
+		return
+	}
+
+	// Keep the message for the operator. Nothing acts on it automatically.
+	if err := s.store.SaveDIDCommInbox(r.Context(), &store.DIDCommInboxMessage{
+		Sender:     sender,
+		MessageID:  msg.ID,
+		Type:       msg.Type,
+		ReceivedAt: now,
+		Body:       string(plaintext),
+	}); err != nil {
+		writeJSONError(w, http.StatusInternalServerError, "store_error", "could not keep the message")
 		return
 	}
 
@@ -177,6 +194,24 @@ func decodeX25519Multibase(mb string) ([32]byte, error) {
 	var out [32]byte
 	copy(out[:], raw[2:34])
 	return out, nil
+}
+
+// DefaultDIDCommTypes are the message types the inbox keeps when the configuration names none. Only
+// basic messages are accepted by default; any other type is refused until it is listed in
+// didcomm.accepted_types.
+var DefaultDIDCommTypes = []string{"https://didcomm.org/basicmessage/2.0/message"}
+
+// didcommAcceptedSet turns a configured list of message types into a lookup set. An empty or nil
+// list selects DefaultDIDCommTypes.
+func didcommAcceptedSet(types []string) map[string]bool {
+	if len(types) == 0 {
+		types = DefaultDIDCommTypes
+	}
+	set := make(map[string]bool, len(types))
+	for _, t := range types {
+		set[t] = true
+	}
+	return set
 }
 
 // Replay and clock limits for received DIDComm messages.

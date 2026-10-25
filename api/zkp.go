@@ -7,7 +7,8 @@ import (
 	vcpkg "github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
-// handleIssueAgeProof handles POST /api/v1/credentials/zkp/age.
+// handleIssueAgeProof handles POST /api/v1/credentials/zkp/age. The result is issuer-attested, not a
+// zero-knowledge proof: the issuer reads the date of birth. See pkg/vc/zkp.go.
 //
 // Derives a signed "age-over-N" VC from a subject's verified DOB credential.
 // The DOB is never returned — only the binary result is in the issued credential.

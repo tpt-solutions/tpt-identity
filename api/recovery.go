@@ -80,6 +80,8 @@ func (s *Server) handleRecoveryEnrol(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		GuardianDIDs []string `json:"guardian_dids"`
 		Threshold    int      `json:"threshold"`
+		// GuardianEmails optionally maps guardian DIDs to the address that receives recovery notices.
+		GuardianEmails map[string]string `json:"guardian_emails,omitempty"`
 	}
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxJSONBody)).Decode(&req); err != nil {
 		http.Error(w, "invalid request", http.StatusBadRequest)
@@ -89,12 +91,17 @@ func (s *Server) handleRecoveryEnrol(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "threshold must be 2..len(guardian_dids)", http.StatusBadRequest)
 		return
 	}
+	if err := validateGuardianEmails(req.GuardianEmails, req.GuardianDIDs); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	cfg := &store.RecoveryConfig{
-		SubjectDID:   subjectDID,
-		Threshold:    req.Threshold,
-		GuardianDIDs: req.GuardianDIDs,
-		CreatedAt:    time.Now(),
+		SubjectDID:     subjectDID,
+		Threshold:      req.Threshold,
+		GuardianDIDs:   req.GuardianDIDs,
+		GuardianEmails: req.GuardianEmails,
+		CreatedAt:      time.Now(),
 	}
 	if err := s.store.SaveRecoveryConfig(r.Context(), cfg); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
@@ -192,6 +199,8 @@ func (s *Server) handleRecoveryInitiate(w http.ResponseWriter, r *http.Request) 
 		out[guardianDID] = encoded
 	}
 
+	notified, notifyFailed := s.noticeGuardians(r.Context(), cfg, reqID, req.SubjectDID, time.Now())
+
 	s.events.Publish(r.Context(), "recovery.initiated", map[string]any{
 		"request_id":  reqID,
 		"subject_did": req.SubjectDID,
@@ -200,10 +209,12 @@ func (s *Server) handleRecoveryInitiate(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"request_id": reqID,
-		"threshold":  cfg.Threshold,
-		"shares":     out,
-		"message":    "Deliver each share only to its guardian. Shares are shown once and are not stored in plaintext.",
+		"request_id":              reqID,
+		"threshold":               cfg.Threshold,
+		"shares":                  out,
+		"notified_guardians":      notified,
+		"notice_failed_guardians": notifyFailed,
+		"message":                 "Deliver each share only to its guardian. Shares are shown once and are not stored in plaintext.",
 	})
 }
 

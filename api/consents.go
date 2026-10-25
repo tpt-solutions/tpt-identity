@@ -127,6 +127,10 @@ func (s *Server) handleSubmitReceipt(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subject_did, relying_did, and schema_id are required", http.StatusBadRequest)
 		return
 	}
+	if !s.callerOwns(r, req.SubjectDID) {
+		writeJSONError(w, http.StatusNotFound, "not_found", "subject not found")
+		return
+	}
 	if req.LegalBasis == "" {
 		req.LegalBasis = consent.LegalBasisConsent
 	}
@@ -157,6 +161,10 @@ func (s *Server) handleListReceipts(w http.ResponseWriter, r *http.Request) {
 	subjectDID := r.URL.Query().Get("subject")
 	if subjectDID == "" {
 		http.Error(w, "subject query parameter required", http.StatusBadRequest)
+		return
+	}
+	if !s.callerOwns(r, subjectDID) {
+		writeJSONError(w, http.StatusNotFound, "not_found", "subject not found")
 		return
 	}
 	receipts, err := s.store.ListReceipts(r.Context(), subjectDID)

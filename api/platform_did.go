@@ -18,8 +18,10 @@ func PlatformDID(issuer string) (string, error) {
 }
 
 // buildPlatformDIDDocument produces the JSON DID document for the platform identity. It
-// carries the signing key (and the encryption key when one is configured).
-func buildPlatformDIDDocument(issuer string, signingPub ed25519.PublicKey, encPriv [crypto.KeySize]byte) (string, []byte, error) {
+// carries the signing key (and the encryption key when one is configured). keyID names the
+// signing key; when empty the document uses the default. retired are earlier signing keys
+// that stay resolvable after a rotation.
+func buildPlatformDIDDocument(issuer string, signingPub ed25519.PublicKey, encPriv [crypto.KeySize]byte, keyID string, retired []did.RetiredKey) (string, []byte, error) {
 	if len(signingPub) != ed25519.PublicKeySize {
 		return "", nil, errors.New("platform signing key missing")
 	}
@@ -27,7 +29,12 @@ func buildPlatformDIDDocument(issuer string, signingPub ed25519.PublicKey, encPr
 	if err != nil {
 		return "", nil, err
 	}
-	opts := did.CreateOptions{Domain: strings.TrimPrefix(platformDID, "did:web:"), SigningPub: signingPub}
+	opts := did.CreateOptions{
+		Domain:       strings.TrimPrefix(platformDID, "did:web:"),
+		SigningPub:   signingPub,
+		SigningKeyID: keyID,
+		RetiredKeys:  retired,
+	}
 	if encPriv != ([crypto.KeySize]byte{}) {
 		encPub, err := crypto.X25519PublicKey(encPriv)
 		if err != nil {

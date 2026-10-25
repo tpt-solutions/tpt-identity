@@ -58,6 +58,7 @@ func (s *Server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
 	identity := &store.Identity{
 		DID:       id,
 		Method:    req.Method,
+		TenantID:  callerTenant(r),
 		CreatedAt: now,
 		UpdatedAt: now,
 	}
@@ -79,8 +80,26 @@ func (s *Server) handleCreateIdentity(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// callerOwns reports whether the caller may act on the records of did. A platform key may act on
+// any record. A tenant key may act only on identities of its own tenant, so an unknown DID is
+// refused too; the caller gets the same answer whether the DID is absent or belongs to another tenant.
+func (s *Server) callerOwns(r *http.Request, did string) bool {
+	tenant := callerTenant(r)
+	if tenant == "" {
+		return true
+	}
+	stored, err := s.store.GetIdentity(r.Context(), did)
+	return err == nil && stored.TenantID == tenant
+}
+
+// handleGetIdentity resolves a DID document. A tenant key sees only identities of its own tenant;
+// anything else answers 404 so the response does not reveal that another tenant holds the DID.
 func (s *Server) handleGetIdentity(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("did")
+	if !s.callerOwns(r, id) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 	doc, err := s.resolver.Resolve(id)
 	if err != nil {
 		http.Error(w, "resolve: "+err.Error(), http.StatusNotFound)

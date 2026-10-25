@@ -68,6 +68,10 @@ func (s *Server) handleAdminSuspendIdentity(w http.ResponseWriter, r *http.Reque
 		http.Error(w, "identity not found: "+err.Error(), http.StatusNotFound)
 		return
 	}
+	if id.Role == "deactivated" {
+		http.Error(w, "a deactivated identity cannot be suspended; it is already unusable", http.StatusConflict)
+		return
+	}
 	id.Role = "suspended"
 	id.UpdatedAt = time.Now()
 	if err := s.store.UpdateIdentity(r.Context(), id); err != nil {
@@ -88,6 +92,10 @@ func (s *Server) handleAdminUnsuspendIdentity(w http.ResponseWriter, r *http.Req
 	id, err := s.store.GetIdentity(r.Context(), did)
 	if err != nil {
 		http.Error(w, "identity not found: "+err.Error(), http.StatusNotFound)
+		return
+	}
+	if id.Role == "deactivated" {
+		http.Error(w, "a deactivated identity cannot be reactivated", http.StatusConflict)
 		return
 	}
 	if id.Role == "suspended" {

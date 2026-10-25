@@ -31,8 +31,20 @@ type EvaluationResult struct {
 	MatchedCredentials map[string]*vc.VerifiableCredential
 }
 
-// Evaluate checks whether the given VP and submission satisfy the definition.
-func Evaluate(def *PresentationDefinition, submission *PresentationSubmission, vp *vc.VerifiablePresentation) (*EvaluationResult, error) {
+// CredentialVerifier checks one credential's proof, status and expiry. vc.Verifier satisfies it.
+type CredentialVerifier interface {
+	Verify(cred *vc.VerifiableCredential) error
+}
+
+// Evaluate checks whether the given VP and submission satisfy the definition. Every credential
+// that a descriptor selects must pass verify before its fields are read. A credential that fails
+// verification does not match, and the failure is reported in the result. Field constraints are
+// never applied to an unverified credential, so claims from a forged credential cannot satisfy a
+// definition.
+func Evaluate(def *PresentationDefinition, submission *PresentationSubmission, vp *vc.VerifiablePresentation, verify CredentialVerifier) (*EvaluationResult, error) {
+	if verify == nil {
+		return nil, errors.New("pe: a credential verifier is required")
+	}
 	if submission.DefinitionID != def.ID {
 		return nil, fmt.Errorf("pe: submission.definition_id %q does not match definition.id %q", submission.DefinitionID, def.ID)
 	}
@@ -40,6 +52,8 @@ func Evaluate(def *PresentationDefinition, submission *PresentationSubmission, v
 	result := &EvaluationResult{
 		MatchedCredentials: make(map[string]*vc.VerifiableCredential),
 	}
+	// Each presented credential is verified once, however many descriptors select it.
+	verified := make(map[int]error)
 
 	// Build a map from descriptor ID → descriptor path.
 	descMap := make(map[string]string)
@@ -60,6 +74,17 @@ func Evaluate(def *PresentationDefinition, submission *PresentationSubmission, v
 		cred, err := resolveCredential(creds, path)
 		if err != nil {
 			result.Errors = append(result.Errors, fmt.Sprintf("descriptor %q: %s", inputDesc.ID, err))
+			continue
+		}
+
+		idx := extractArrayIndex(path)
+		vErr, seen := verified[idx]
+		if !seen {
+			vErr = verify.Verify(cred)
+			verified[idx] = vErr
+		}
+		if vErr != nil {
+			result.Errors = append(result.Errors, fmt.Sprintf("descriptor %q: credential failed verification: %s", inputDesc.ID, vErr))
 			continue
 		}
 

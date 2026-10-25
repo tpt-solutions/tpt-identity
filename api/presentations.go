@@ -167,7 +167,7 @@ func (s *Server) handleSubmitPresentation(w http.ResponseWriter, r *http.Request
 		}
 	}
 
-	result, err := pe.Evaluate(&req.Definition, &body.Submission, &body.Presentation)
+	result, err := pe.Evaluate(&req.Definition, &body.Submission, &body.Presentation, verifier)
 	if err != nil {
 		http.Error(w, "evaluation error: "+err.Error(), http.StatusBadRequest)
 		return

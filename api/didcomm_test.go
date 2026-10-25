@@ -29,7 +29,14 @@ type dcFixture struct {
 
 // newDIDCommFixture starts a server with an X25519 receive key and makes a did:peer sender with its
 // own X25519 key.
+// newDIDCommFixture accepts the ping type used by most tests.
 func newDIDCommFixture(t *testing.T) *dcFixture {
+	t.Helper()
+	return newDIDCommFixtureTypes(t, []string{"https://example.com/ping"})
+}
+
+// newDIDCommFixtureTypes starts the server with the given accepted message types.
+func newDIDCommFixtureTypes(t *testing.T, types []string) *dcFixture {
 	t.Helper()
 	st := storetest.New(t)
 
@@ -37,15 +44,16 @@ func newDIDCommFixture(t *testing.T) *dcFixture {
 	recipPub, recipPriv, _ := crypto.GenerateEncryptionKey()
 	res := resolver.New(time.Minute)
 	srv := api.NewServer(api.Config{
-		APIKey:       testAPIKey,
-		Issuer:       testIssuer,
-		SigningKey:   signPriv,
-		SigningKeyID: testPlatformDID + "#signing-key-1",
-		EncKey:       recipPriv,
-		EncKeyID:     dcRecipKID,
-		Store:        st,
-		Resolver:     res,
-		OIDC:         oidc.NewProvider(testIssuer, signPriv, "test-key-1", st),
+		APIKey:               testAPIKey,
+		Issuer:               testIssuer,
+		SigningKey:           signPriv,
+		SigningKeyID:         testPlatformDID + "#signing-key-1",
+		EncKey:               recipPriv,
+		EncKeyID:             dcRecipKID,
+		DIDCommAcceptedTypes: types,
+		Store:                st,
+		Resolver:             res,
+		OIDC:                 oidc.NewProvider(testIssuer, signPriv, "test-key-1", st),
 	})
 
 	senderSign, _, _ := crypto.GenerateSigningKey()
@@ -102,7 +110,7 @@ func TestDIDCommAcceptsAuthenticatedMessageOnce(t *testing.T) {
 // from must name the authenticated sender. A different from is refused.
 func TestDIDCommRefusesForgedFrom(t *testing.T) {
 	f := newDIDCommFixture(t)
-	msg := f.message(t, didcomm.Message{ID: "m-2", Type: "t", From: "did:peer:someone-else", CreatedTime: time.Now().Unix()})
+	msg := f.message(t, didcomm.Message{ID: "m-2", Type: "https://example.com/ping", From: "did:peer:someone-else", CreatedTime: time.Now().Unix()})
 	env, err := didcomm.PackAuthcrypt(msg, f.recipients(), f.senderKID, f.senderPriv)
 	if err != nil {
 		t.Fatal(err)
@@ -115,7 +123,7 @@ func TestDIDCommRefusesForgedFrom(t *testing.T) {
 // A message past its expires_time is refused.
 func TestDIDCommRefusesExpiredMessage(t *testing.T) {
 	f := newDIDCommFixture(t)
-	msg := f.message(t, didcomm.Message{ID: "m-3", Type: "t", ExpiresTime: time.Now().Add(-time.Minute).Unix()})
+	msg := f.message(t, didcomm.Message{ID: "m-3", Type: "https://example.com/ping", ExpiresTime: time.Now().Add(-time.Minute).Unix()})
 	env, err := didcomm.PackAnoncrypt(msg, f.recipients())
 	if err != nil {
 		t.Fatal(err)
@@ -129,7 +137,7 @@ func TestDIDCommRefusesExpiredMessage(t *testing.T) {
 // accepted as unauthenticated.
 func TestDIDCommAnoncryptFromIsNotTrusted(t *testing.T) {
 	f := newDIDCommFixture(t)
-	msg := f.message(t, didcomm.Message{ID: "m-4", Type: "t", From: f.senderDID, CreatedTime: time.Now().Unix()})
+	msg := f.message(t, didcomm.Message{ID: "m-4", Type: "https://example.com/ping", From: f.senderDID, CreatedTime: time.Now().Unix()})
 	env, err := didcomm.PackAnoncrypt(msg, f.recipients())
 	if err != nil {
 		t.Fatal(err)
@@ -142,7 +150,7 @@ func TestDIDCommAnoncryptFromIsNotTrusted(t *testing.T) {
 // A message without an id cannot be checked for replay, so it is refused.
 func TestDIDCommRefusesMessageWithoutID(t *testing.T) {
 	f := newDIDCommFixture(t)
-	msg := f.message(t, didcomm.Message{Type: "t", CreatedTime: time.Now().Unix()})
+	msg := f.message(t, didcomm.Message{Type: "https://example.com/ping", CreatedTime: time.Now().Unix()})
 	env, err := didcomm.PackAnoncrypt(msg, f.recipients())
 	if err != nil {
 		t.Fatal(err)

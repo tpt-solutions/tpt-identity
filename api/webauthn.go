@@ -340,6 +340,7 @@ func (s *Server) handleDeleteWebAuthnCredential(w http.ResponseWriter, r *http.R
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
+	unanchorWebAuthnKey(r.Context(), s.store, subjectDID, credID)
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -358,12 +359,7 @@ func anchorWebAuthnKey(ctx context.Context, st store.Store, subjectDID, credID s
 		}
 	}
 
-	// Derive a stable verification-method ID from the credential ID prefix.
-	shortID := credID
-	if len(shortID) > 8 {
-		shortID = shortID[:8]
-	}
-	vmID := subjectDID + "#webauthn-" + shortID
+	vmID := webAuthnVMID(subjectDID, credID)
 
 	// Idempotent: skip if already anchored.
 	for _, vm := range doc.VerificationMethod {
@@ -381,6 +377,46 @@ func anchorWebAuthnKey(ctx context.Context, st store.Store, subjectDID, credID s
 		PublicKeyMultibase: &multibase,
 	})
 	doc.Authentication = append(doc.Authentication, vmID)
+	_ = st.SaveDocument(ctx, doc)
+}
+
+// webAuthnVMID is the verification-method ID an anchored passkey is published under.
+func webAuthnVMID(subjectDID, credID string) string {
+	shortID := credID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	return subjectDID + "#webauthn-" + shortID
+}
+
+// unanchorWebAuthnKey removes a passkey's verification method from the subject's DID Document, so a
+// deleted authenticator's key is no longer published. A document without the key is left as it is.
+func unanchorWebAuthnKey(ctx context.Context, st store.Store, subjectDID, credID string) {
+	doc, err := st.GetDocument(ctx, subjectDID)
+	if err != nil {
+		return
+	}
+	vmID := webAuthnVMID(subjectDID, credID)
+	methods := doc.VerificationMethod[:0]
+	removed := false
+	for _, vm := range doc.VerificationMethod {
+		if vm.ID == vmID {
+			removed = true
+			continue
+		}
+		methods = append(methods, vm)
+	}
+	if !removed {
+		return
+	}
+	doc.VerificationMethod = methods
+	auth := doc.Authentication[:0]
+	for _, id := range doc.Authentication {
+		if id != vmID {
+			auth = append(auth, id)
+		}
+	}
+	doc.Authentication = auth
 	_ = st.SaveDocument(ctx, doc)
 }
 

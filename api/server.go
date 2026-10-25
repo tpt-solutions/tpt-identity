@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"crypto/subtle"
@@ -38,22 +39,25 @@ type Server struct {
 	scoped   []ScopedKey
 	issuer   string
 	// platformDID is the did:web identifier of this server; it is the issuer of every credential.
-	platformDID    string
-	platformDIDDoc []byte // JSON DID document served at /.well-known/did.json; nil if unavailable
-	totpPassphrase string
-	logger         *slog.Logger
-	magicLinks     MagicLinkSender
-	passwordResets PasswordResetSender
-	recoveries     *recoveryCollector
-	presentations  *presentationRequests
-	bridgeKey      []byte // HMAC key for bridge state tokens (independent of api_key)
-	limiter        *ipRateLimiter
+	platformDID     string
+	platformDIDDoc  []byte // JSON DID document served at /.well-known/did.json; nil if unavailable
+	totpPassphrase  string
+	logger          *slog.Logger
+	magicLinks      MagicLinkSender
+	recoveryNotices RecoveryNoticeSender
+	passwordResets  PasswordResetSender
+	recoveries      *recoveryCollector
+	presentations   *presentationRequests
+	bridgeKey       []byte // HMAC key for bridge state tokens (independent of api_key)
+	limiter         *ipRateLimiter
 	// Platform signing key — used for issuing VCs and SD-JWT credentials.
 	signingKey   ed25519.PrivateKey
 	signingKeyID string // verification method ID, e.g. did:web:example.com#signing-key-1
 	// Platform X25519 encryption key — used for DIDComm v2 envelope decryption.
 	encKey   [32]byte
 	encKeyID string // key agreement method ID, e.g. did:web:example.com#enc-key-1
+	// didcommTypes are the message types kept in the inbox; other types are refused.
+	didcommTypes map[string]bool
 	// Bridge layer
 	bridges *bridge.Manager
 	mapper  *bridge.Mapper
@@ -96,17 +100,25 @@ type Config struct {
 	// SigningKey is the platform Ed25519 private key used for VC and SD-JWT issuance.
 	SigningKey   ed25519.PrivateKey
 	SigningKeyID string // verification method ID
+	// RetiredSigningKeys are earlier signing keys. They stay in the platform DID document, so the
+	// credentials and tokens they signed still verify. See `tpt-identity rotate-key`.
+	RetiredSigningKeys []did.RetiredKey
 	// EncKey is the platform X25519 private key for DIDComm v2 envelope decryption.
 	// Both EncKey and EncKeyID must be set to enable the POST /didcomm endpoint.
 	EncKey   [32]byte
 	EncKeyID string // key agreement method ID, e.g. did:web:example.com#enc-key-1
-	Store    store.Store
-	Resolver *resolver.Resolver
-	OIDC     *oidc.Provider
-	Bridges  *bridge.Manager
+	// DIDCommAcceptedTypes are the message types the DIDComm inbox keeps. Nil selects DefaultDIDCommTypes.
+	DIDCommAcceptedTypes []string
+	Store                store.Store
+	Resolver             *resolver.Resolver
+	OIDC                 *oidc.Provider
+	Bridges              *bridge.Manager
 	// MagicLinkSender delivers magic-link URLs out of band (e.g. email). Required for
 	// POST /auth/magiclink/request to succeed; the link is never returned to the caller.
 	MagicLinkSender MagicLinkSender
+	// RecoveryNoticeSender tells guardians that a recovery started. Without it, notices are not sent and
+	// the initiation response lists those guardians as not notified.
+	RecoveryNoticeSender RecoveryNoticeSender
 	// PasswordResetSender delivers reset tokens. Without it, reset requests are accepted
 	// but no token is issued.
 	PasswordResetSender PasswordResetSender
@@ -150,7 +162,7 @@ func NewServer(cfg Config) *Server {
 	}
 	platformDID, platformDIDDoc := "", []byte(nil)
 	if cfg.SigningKey != nil {
-		if id, doc, err := buildPlatformDIDDocument(cfg.Issuer, cfg.SigningKey.Public().(ed25519.PublicKey), cfg.EncKey); err != nil {
+		if id, doc, err := buildPlatformDIDDocument(cfg.Issuer, cfg.SigningKey.Public().(ed25519.PublicKey), cfg.EncKey, cfg.SigningKeyID, cfg.RetiredSigningKeys); err != nil {
 			logger.Warn("platform DID not configured", "error", err)
 		} else {
 			platformDID, platformDIDDoc = id, doc
@@ -196,8 +208,10 @@ func NewServer(cfg Config) *Server {
 		signingKeyID:       cfg.SigningKeyID,
 		encKey:             cfg.EncKey,
 		encKeyID:           cfg.EncKeyID,
+		didcommTypes:       didcommAcceptedSet(cfg.DIDCommAcceptedTypes),
 		logger:             logger,
 		magicLinks:         cfg.MagicLinkSender,
+		recoveryNotices:    cfg.RecoveryNoticeSender,
 		passwordResets:     cfg.PasswordResetSender,
 		recoveries:         newRecoveryCollector(),
 		presentations:      newPresentationRequests(),
@@ -295,6 +309,14 @@ func NewServer(cfg Config) *Server {
 		s.mapper.SetBootstrap(s.bootstrapCredentials)
 	}
 
+	// DIDs hosted here resolve from the store, which holds the current document, including any
+	// passkeys anchored after the document was created. Other DIDs resolve over the network.
+	if s.resolver != nil {
+		s.resolver.SetLocal(func(id string) (*did.Document, bool) {
+			return s.hostedDocument(context.Background(), id)
+		})
+	}
+
 	s.routes()
 	return s
 }
@@ -364,6 +386,7 @@ func (s *Server) routes() {
 
 	// Status list (public — verifiers fetch without auth)
 	s.mux.HandleFunc("GET /api/v1/status/{listId}", s.wrap(s.audit(s.handleStatusList)))
+	s.mux.HandleFunc("GET /api/v1/token-status/{listId}", s.wrap(s.audit(s.handleTokenStatusList)))
 
 	// ── Identity bridge (public) ───────────────────────────────────────────
 	s.mux.HandleFunc("GET /auth/{provider}", s.wrap(s.rateLimit(s.audit(s.handleBridgeStart))))
@@ -380,15 +403,16 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /auth/password/reset/confirm", s.wrap(s.rateLimit(s.audit(s.handlePasswordResetConfirm))))
 
 	// ── Protected API ──────────────────────────────────────────────────────
-	s.mux.HandleFunc("POST /api/v1/identities", s.wrap(s.rateLimit(s.audit(s.auth(scopeIdentities, s.handleCreateIdentity)))))
-	s.mux.HandleFunc("GET /api/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.auth(scopeIdentities, s.handleGetIdentity)))))
-	s.mux.HandleFunc("POST /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleIssueCredential)))))
-	s.mux.HandleFunc("POST /api/v1/credentials/verify", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleVerifyCredential)))))
-	s.mux.HandleFunc("GET /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleListCredentials)))))
-	s.mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleDeleteCredential)))))
+	s.mux.HandleFunc("POST /api/v1/identities", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeIdentities, s.handleCreateIdentity)))))
+	s.mux.HandleFunc("GET /api/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeIdentities, s.handleGetIdentity)))))
+	s.mux.HandleFunc("POST /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeCredentials, s.handleIssueCredential)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/verify", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeCredentials, s.handleVerifyCredential)))))
+	s.mux.HandleFunc("GET /api/v1/credentials", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeCredentials, s.handleListCredentials)))))
+	s.mux.HandleFunc("DELETE /api/v1/credentials/{id}", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeCredentials, s.handleDeleteCredential)))))
 	// SD-JWT selective disclosure
 	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleIssueSDJWT)))))
 	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt/verify", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleVerifySDJWT)))))
+	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt/{id}/revoke", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleRevokeSDJWT)))))
 	s.mux.HandleFunc("POST /api/v1/credentials/sd-jwt/present", s.wrap(s.rateLimit(s.audit(s.handleSDJWTPresentWithWatermark))))
 	// Batch issuance + freshness oracle
 	s.mux.HandleFunc("POST /api/v1/credentials/batch", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleBatchIssueCredentials)))))
@@ -400,8 +424,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleListGrants))))
 	s.mux.HandleFunc("POST /api/v1/consents/grants", s.wrap(s.rateLimit(s.audit(s.handleCreateGrant))))
 	s.mux.HandleFunc("DELETE /api/v1/consents/grants/{id}", s.wrap(s.rateLimit(s.audit(s.handleRevokeGrant))))
-	s.mux.HandleFunc("GET /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(scopeConsents, s.handleListReceipts)))))
-	s.mux.HandleFunc("POST /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.auth(scopeConsents, s.handleSubmitReceipt)))))
+	s.mux.HandleFunc("GET /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeConsents, s.handleListReceipts)))))
+	s.mux.HandleFunc("POST /api/v1/consents/receipts", s.wrap(s.rateLimit(s.audit(s.authTenant(scopeConsents, s.handleSubmitReceipt)))))
 	s.mux.HandleFunc("DELETE /api/v1/sessions/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeSessions, s.handleDeleteSession)))))
 	s.mux.HandleFunc("GET /api/v1/schemas", s.wrap(s.rateLimit(s.audit(s.auth(scopeCredentials, s.handleListSchemas)))))
 
@@ -451,6 +475,8 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("GET /admin/v1/identities", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminListIdentities)))))
 	s.mux.HandleFunc("POST /admin/v1/identities/{did}/suspend", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminSuspendIdentity)))))
 	s.mux.HandleFunc("POST /admin/v1/identities/{did}/unsuspend", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminUnsuspendIdentity)))))
+	s.mux.HandleFunc("POST /admin/v1/identities/{did}/deactivate", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminDeactivateIdentity)))))
+	s.mux.HandleFunc("GET /admin/v1/didcomm/inbox", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminListDIDCommInbox)))))
 	s.mux.HandleFunc("DELETE /admin/v1/identities/{did}", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminDeleteIdentity)))))
 	s.mux.HandleFunc("GET /admin/v1/clients", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminListClients)))))
 	s.mux.HandleFunc("DELETE /admin/v1/clients/{id}", s.wrap(s.rateLimit(s.audit(s.auth(scopeAdmin, s.handleAdminDeleteClient)))))
@@ -538,49 +564,82 @@ const (
 
 // ScopedKey is a bearer credential restricted to the listed scopes. A scope of "*" grants all
 // non-admin scopes.
+//
+// A key with a TenantID is bound to one tenant. It is refused on every route, except the routes
+// wrapped in authTenant, and those handlers show it only the records of that tenant. A tenant key
+// never grants admin.
 type ScopedKey struct {
-	Name   string
-	Key    string
-	Scopes []string
+	Name     string   `mapstructure:"name"`
+	Key      string   `mapstructure:"key"`
+	Scopes   []string `mapstructure:"scopes"`
+	TenantID string   `mapstructure:"tenant_id"`
 }
 
-// auth middleware checks the Bearer credential against the key set for the given scope.
+// tenantCtxKey carries the tenant of the authenticated key. The master and admin keys carry "".
+type tenantCtxKey struct{}
+
+// callerTenant returns the tenant bound to the key that authenticated r, or "" for a platform key.
+func callerTenant(r *http.Request) string {
+	tenant, _ := r.Context().Value(tenantCtxKey{}).(string)
+	return tenant
+}
+
+// auth middleware checks the Bearer credential against the key set for the given scope. Tenant
+// keys are refused: a route is open to them only when it is wrapped in authTenant.
 func (s *Server) auth(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return s.authWith(scope, false, next)
+}
+
+// authTenant is auth for routes whose handlers filter by tenant, so tenant keys may call them.
+func (s *Server) authTenant(scope string, next http.HandlerFunc) http.HandlerFunc {
+	return s.authWith(scope, true, next)
+}
+
+func (s *Server) authWith(scope string, allowTenant bool, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		bearer := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-		if !s.authorized(bearer, scope) {
+		tenant, ok := s.authorized(bearer, scope)
+		if !ok {
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return
 		}
-		next(w, r)
+		if tenant != "" && !allowTenant {
+			http.Error(w, "forbidden: this route is not available to tenant keys", http.StatusForbidden)
+			return
+		}
+		next(w, r.WithContext(context.WithValue(r.Context(), tenantCtxKey{}, tenant)))
 	}
 }
 
-// authorized reports whether token may act within scope. Every comparison is constant-time and
-// an unconfigured or empty key never matches, so the middleware fails closed.
-func (s *Server) authorized(token, scope string) bool {
+// authorized reports whether token may act within scope, and the tenant it is bound to ("" for a
+// platform key). Every comparison is constant-time and an unconfigured or empty key never matches,
+// so the middleware fails closed.
+func (s *Server) authorized(token, scope string) (tenant string, ok bool) {
 	if token == "" {
-		return false
+		return "", false
 	}
 	if scope == scopeAdmin && s.adminKey != "" {
 		// A dedicated admin credential replaces the master key for admin endpoints.
 		if constantEqual(token, s.adminKey) {
-			return true
+			return "", true
 		}
 	} else if s.apiKey != "" && constantEqual(token, s.apiKey) {
-		return true
+		return "", true
 	}
 	for _, k := range s.scoped {
 		if k.Key == "" || !constantEqual(token, k.Key) {
 			continue
 		}
+		if k.TenantID != "" && scope == scopeAdmin {
+			return "", false
+		}
 		for _, granted := range k.Scopes {
 			if granted == scope || (granted == "*" && scope != scopeAdmin) {
-				return true
+				return k.TenantID, true
 			}
 		}
 	}
-	return false
+	return "", false
 }
 
 func constantEqual(a, b string) bool {

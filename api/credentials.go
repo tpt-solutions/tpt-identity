@@ -34,6 +34,17 @@ func (s *Server) handleIssueCredential(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad request: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+	if callerTenant(r) != "" {
+		// A tenant key issues only from the platform issuer, on its own status list.
+		if req.IssuerDID != "" || req.StatusListCredential != "" {
+			writeJSONError(w, http.StatusBadRequest, "invalid_issuer", "issuer_did and status_list_credential are not available to tenant keys")
+			return
+		}
+		if !s.callerOwns(r, req.SubjectDID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "subject not found")
+			return
+		}
+	}
 
 	issuerDID, err := s.issuerForRequest(req.IssuerDID)
 	if err != nil {
@@ -118,6 +129,10 @@ func (s *Server) handleListCredentials(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "subject query parameter required", http.StatusBadRequest)
 		return
 	}
+	if !s.callerOwns(r, subjectDID) {
+		writeJSONError(w, http.StatusNotFound, "not_found", "subject not found")
+		return
+	}
 	creds, err := s.store.ListCredentials(r.Context(), subjectDID)
 	if err != nil {
 		http.Error(w, "list: "+err.Error(), http.StatusInternalServerError)
@@ -139,6 +154,13 @@ func (s *Server) handleListCredentials(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleDeleteCredential(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
+	if callerTenant(r) != "" {
+		cred, err := s.store.GetCredential(r.Context(), id)
+		if err != nil || !s.callerOwns(r, cred.CredentialSubject.ID) {
+			writeJSONError(w, http.StatusNotFound, "not_found", "credential not found")
+			return
+		}
+	}
 	if err := s.store.DeleteCredential(r.Context(), id); err != nil {
 		http.Error(w, "delete: "+err.Error(), http.StatusInternalServerError)
 		return
