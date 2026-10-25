@@ -141,6 +141,12 @@ type Config struct {
 	Marketplace *marketplace.Registry
 }
 
+// Mount registers an extra handler under pattern, for code that runs beside the API. The demo relying party
+// is mounted this way. Mount must be called before the server takes requests.
+func (s *Server) Mount(pattern string, h http.Handler) {
+	s.mux.Handle(pattern, h)
+}
+
 // Close stops the background eviction loops. It is safe to call more than once.
 func (s *Server) Close() {
 	s.stopOnce.Do(func() { close(s.stop) })
