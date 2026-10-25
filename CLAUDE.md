@@ -74,7 +74,7 @@ The `api.Server` struct carries all runtime dependencies: `store.Store`, `oidc.P
 
 ### DID methods
 
-Registered at `init()` time via `pkg/did/method.go`'s global registry. The four methods (`web`, `key`, `peer`, and optionally `ion` under build tag) each live in their own file. `did:web` resolution fetches `https://{domain}/.well-known/did.json` with SSRF hardening (RFC-1918 blocked, 5 s timeout, max 1 redirect). The `internal/resolver` package wraps DID resolution with a TTL cache.
+Registered at `init()` time via `pkg/did/method.go`'s global registry. The four methods (`web`, `key`, `peer`, and optionally `ion` under build tag, experimental: its Create is not implemented) each live in their own file. `did:web` resolution fetches `https://{domain}/.well-known/did.json` with SSRF hardening (RFC-1918 blocked, 5 s timeout, max 1 redirect). The `internal/resolver` package wraps DID resolution with a TTL cache.
 
 ### SD-JWT selective disclosure
 
@@ -104,13 +104,13 @@ Schemas marked `ExtraSensitive: true` (mental-health, addiction, criminal-record
 
 ### Identity bridge
 
-`internal/bridge/bridge.go` defines the `Bridge` interface. Providers (OIDC RP, magic link, password, SAML†, LDAP†) authenticate and return an `ExternalIdentity{Provider, ExternalID, Claims}`. `internal/bridge/mapper.go` finds or creates the corresponding platform DID in the store; each external identity maps to exactly one DID. Account linking (`POST /api/v1/me/links`) attaches additional providers to an existing DID. The bridge HTTP handlers in `api/bridge.go` use a HMAC-signed state token to carry OIDC flow parameters across the external provider redirect without a server-side state table.
+`internal/bridge/bridge.go` defines the `Bridge` interface. Providers (OIDC RP, magic link, password, SAML†, LDAP†; the LDAP bridge has no HTTP login route yet, so it is not reachable) authenticate and return an `ExternalIdentity{Provider, ExternalID, Claims}`. `internal/bridge/mapper.go` finds or creates the corresponding platform DID in the store; each external identity maps to exactly one DID. Account linking (`POST /api/v1/me/links`) attaches additional providers to an existing DID. The bridge HTTP handlers in `api/bridge.go` use a HMAC-signed state token to carry OIDC flow parameters across the external provider redirect without a server-side state table.
 
 †Require build tags: `-tags saml` / `-tags ldap`.
 
 ### Persistence
 
-`internal/store/store.go` defines the `Store` interface; `internal/store/sqlite.go` is the only implementation. Schema migrations live in `internal/store/migrations/*.sql` and are applied by the embedded runner — `tpt-identity migrate up` applies them; the schema is PostgreSQL-compatible for a future migration. All list/get operations use the context for cancellation. `OIDCSession` stores PKCE challenge, state, user-agent, IP, and refresh token hash alongside the auth code.
+`internal/store/store.go` defines the `Store` interface; `internal/store/sqlite.go` is the only implementation. The SQLite schema is built by the embedded migrations in `internal/store/migrations/*.sql`. `OpenSQLite` runs them, so a database is current when the store opens, and `tpt-identity migrate up` runs the same ones. Migration 004 is the complete schema, and its Go hook (`reconcileColumns`) adds columns that older shapes lack. Migrations 001-003 are history: their shapes differ, so only 004 is authoritative. The readiness probe fails when the applied version is behind. PostgreSQL still builds its schema inline (`pgSchema`) and keeps no version record, because the runner is SQLite-only. All list/get operations use the context for cancellation. `OIDCSession` stores PKCE challenge, state, user-agent, IP, and refresh token hash alongside the auth code.
 
 ### Consent and receipts
 
@@ -140,7 +140,7 @@ TTL is **15 minutes** (hardcoded in `internal/bridge/providers/magiclink.go`). T
 
 ### Verifiable audit log
 
-`internal/auditlog/auditlog.go` — subscribes to all `events.Bus` events and appends each to an `audit_log` table as `SHA-256(prev_hash ‖ event_json)`. `GET /api/v1/audit-log` returns events in sequence order. `GET /api/v1/audit-log/proof/{seq}` returns the hash chain from `seq` to head for third-party verification.
+`internal/auditlog/auditlog.go` — subscribes to all `events.Bus` events and appends each to an `audit_log` table as a hash-chained row. New rows are hash version 2: `SHA-256(prev_hash ‖ {version, event_type, payload, prev_hash, recorded_at})`, so the recorded time is covered. Rows from before versioning are version 1, which omits the time. `store.VerifyAuditChain` checks a run of events under either version. `GET /api/v1/audit-log` returns events in sequence order. `GET /api/v1/audit-log/proof/{seq}` returns the hash chain from `seq` to head for third-party verification.
 
 ### Guardian recovery
 
@@ -166,7 +166,7 @@ TTL is **15 minutes** (hardcoded in `internal/bridge/providers/magiclink.go`). T
 - **`PackAuthcrypt(msg, recipients, senderKID, senderPriv)`** — ECDH-1PU+A256KW+XC20P; sender's static X25519 key is bound into each recipient's KEK.
 - **`Unpack(envelope, recipKeyFn, senderPubFn)`** — decodes protected header, tries each recipient until one succeeds; `senderPubFn` is called only for authcrypt to verify the sender key (may be nil for anoncrypt-only servers).
 
-**Key derivation**: Concat KDF (NIST SP 800-56A / RFC 7518 §4.6.2) — `SHA-256(counter || Z || algID || PartyUInfo || PartyVInfo || keydatalen)`. For authcrypt: `Z = Ze || Zs` where `Ze = ECDH(ephem, recip)` and `Zs = ECDH(sender_static, recip)`.
+**Key derivation**: Concat KDF (NIST SP 800-56A / RFC 7518 §4.6.2) — `SHA-256(counter || Z || algID || PartyUInfo || PartyVInfo || keydatalen || SuppPrivInfo)`. For authcrypt: `Z = Ze || Zs` where `Ze = ECDH(ephem, recip)` and `Zs = ECDH(sender_static, recip)`, and `SuppPrivInfo` is the content-encryption tag (the content is encrypted before the CEK is wrapped). Anoncrypt has no SuppPrivInfo.
 
 **`apv`**: `base64url(SHA-256(sorted recipient KIDs joined with "."))` — included in all envelopes; used in the KDF.
 
@@ -199,6 +199,11 @@ TTL is **15 minutes** (hardcoded in `internal/bridge/providers/magiclink.go`). T
 - **`did:peer` uses base64url multibase prefix `u`** — the multicodec key bytes are base64url-encoded with prefix `u`, not base58btc (`z`). The VC verifier has a fallback for `u`-prefixed keys.
 - **Webhook `handleListWebhooks` passes `""` as eventType** — `ListWebhookSubscriptions("", ...)` returns all subscriptions regardless of event type; non-empty values filter by event type. Do not change this to `"*"`.
 - **`SetWebResolverConfig` writes directly to `methods["web"]`** — it does not call `RegisterMethod` (which panics on re-registration). Keep this pattern for test helpers that reconfigure the web resolver.
+- **Tenant keys are refused by default** — `auth(scope, ...)` refuses a tenant-bound scoped key with 403. Only routes wrapped in `authTenant` accept one, and their handlers must check the caller with `callerOwns`. Admin is never granted to a tenant key.
+- **Deactivation is permanent** — `identity.role = "deactivated"` cannot be suspended or unsuspended, and the DID resolves with no keys (`api/deactivate.go`).
+- **`private_key_jwt` assertions use the seen-message table** — the jti is recorded in `didcomm_seen` under sender `client_assertion:<client_id>`.
+- **SD-JWT payload claims are issuer-owned** — `iss`, `sub`, `iat`, `exp`, `nbf`, `_sd`, `_sd_alg`, `vct`, `jti` and `status` cannot be set by the caller (`pkg/vc/sdjwt.go`, `issuerOwnedClaims`).
+- **The DIDComm inbox is not an action queue** — messages are kept only when their type is in `didcomm.accepted_types`. Nothing consumes them automatically.
 - **`ValidFor < 0` in `vc.Issue` / `IssueReputationVC`** — negative values set an already-expired `ValidUntil` (useful for tests). Zero means no expiry. Both `vc.Issue` and `trust.IssueReputationVC` handle this identically.
 
 ## Configuration

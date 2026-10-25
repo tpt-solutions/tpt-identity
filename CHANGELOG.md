@@ -14,6 +14,30 @@ All notable changes to this project are documented here. The format follows [Kee
 - `Makefile` with `build`, `vet`, `test`, `race`, `lint`, `fmt`, and `check` targets.
 - `.golangci.yml` lint configuration.
 
+- `tpt-identity rotate-key` generates a new signing key and prints the config change. The outgoing key stays in the platform DID document and in `identity.previous_keys`.
+- Tenant-bound scoped keys (`scoped_api_keys[].tenant_id`) see and create only their own identities, and see only their own credentials and consent receipts. A tenant key is refused everywhere else.
+- Client authentication with `private_key_jwt` (RFC 7523): clients register Ed25519 keys through `jwks`.
+- OID4VP accepts JWT-format presentations (a compact JWS signed by the holder, bound to the request by `aud`, `nonce` and `exp`).
+- SD-JWT credentials carry a `status` claim and a `jti`. They are revocable by id (`POST /api/v1/credentials/sd-jwt/{id}/revoke`), and their status is published as an IETF Token Status List (`GET /api/v1/token-status/{listId}`).
+- Permanent DID deactivation: `POST /admin/v1/identities/{did}/deactivate`. The DID then resolves with no keys.
+- DIDComm inbox: received messages whose type is in `didcomm.accepted_types` are kept for the operator (`GET /admin/v1/didcomm/inbox`). Only basic messages are accepted by default.
+- Guardian recovery notices: a guardian with an address (`guardian_emails` at enrolment) is told when a recovery starts. The notice carries no token or share.
+- Passkeys appear in the resolved DID document, and deleting a passkey removes its key.
+- Audit log hash version 2 covers the recorded time. Rows written before this change still verify.
+- `pe.Evaluate` requires a credential verifier. A credential that fails verification never matches.
+
+### Changed
+
+- **Breaking:** authcrypt DIDComm envelopes bind the content tag into the key derivation (ECDH-1PU `SuppPrivInfo`). Envelopes produced before this change no longer unpack. Anoncrypt envelopes are unchanged.
+- The PAR front-channel call must name the client that pushed the request. Without a matching `client_id` it is refused.
+- Identities hosted here resolve from the store, uncached, so updates show at once.
+- SQLite schema: the server builds its schema from the embedded migrations, not inline. Migration 004 is the complete schema. Existing databases upgrade on the next start, and `tpt-identity migrate up` applies the same migrations. `/readyz` reports degraded when the schema version is behind this build. PostgreSQL still builds its schema inline and keeps no version record.
+
+### Security
+
+- A caller could supply `iss`, `sub`, `exp` or other issuer-owned claims as always-visible SD-JWT claims, and the platform signed them. Those claims are now refused.
+- A PAR `request_uri` could be burned by a client other than the one that pushed it. The check now runs before the request is consumed.
+
 ### Fixed
 
 - `tpt-identity migrate` opened `database.path`, a key the server never reads, so it inspected a different file from the one the server used. It now uses `db_path`.

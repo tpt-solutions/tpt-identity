@@ -23,6 +23,13 @@ api_key: "change-me-to-a-long-random-string"
 #   - name: "webhook-receiver"
 #     key: "change-me-to-another-long-random-string"
 #     scopes: ["webhooks"]
+#
+# A key with tenant_id is bound to one tenant. It may only use the "identities" scope, and it
+# sees only the identities it created. It can never hold the admin scope.
+#   - name: "acme-identities"
+#     key: "change-me-to-a-third-long-random-string"
+#     scopes: ["identities"]
+#     tenant_id: "acme"
 
 # HMAC key for bridge (external login) state tokens. Use a separate random value of at
 # least 32 bytes. Required when running more than one replica; if unset, a random key is
@@ -41,9 +48,11 @@ identity:
   passphrase: ""
   # Verification method ID in the DID document (default: <issuer>#signing-key-1)
   key_id: ""
-  # Rotation: after a new signing key replaces identity.signing_key (with a new identity.key_id), keep the
-  # old public key here so tokens it signed still verify. Remove an entry once every token it signed has
-  # expired (oidc.access_token_ttl is the bound). public_key is the old key's raw Ed25519 public key, base64url.
+  # Rotation: `tpt-identity rotate-key --out-sign <new.pem>` generates the new key and prints the block
+  # to paste here. The old key is kept in the platform DID document and in previous_keys, so credentials
+  # and tokens it signed keep verifying. Keep an entry while any credential or token it signed is still
+  # valid: credentials can outlive oidc.access_token_ttl, so use the longest validity you issue.
+  # public_key is the old key's raw Ed25519 public key, base64url.
   # previous_keys:
   #   - kid: "did:web:identity.example.com#signing-key-0"
   #     public_key: "<base64url of the 32-byte public key>"

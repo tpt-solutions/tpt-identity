@@ -12,7 +12,7 @@ Sovereign identity backbone for the TPT open-source ecosystem. Every person gets
 - **Verifiable Credentials** — issue and verify W3C VC Data Model 2.0 with DataIntegrityProof (eddsa-jcs-2022) and SD-JWT selective disclosure
 - **Consent receipts** — cryptographically signed records of who accessed what, under what legal basis (NZ Privacy Act 2020 compliant)
 - **OIDC Provider** — authorization code flow with mandatory PKCE, dynamic client registration (RFC 7591), token introspection (RFC 7662), back-channel logout (OIDC BCL 1.0), client credentials grant (RFC 6749 §4.4), refresh token rotation
-- **Identity bridges** — accept Google, GitHub, Azure AD, SAML 2.0, LDAP/AD, magic link, password, and passkey (WebAuthn) auth; each maps to a platform DID
+- **Identity bridges** — accept Google, GitHub, Azure AD, SAML 2.0 (LDAP/AD has no login route yet), magic link, password, and passkey (WebAuthn) auth; each maps to a platform DID
 - **Account linking** — one DID, multiple external auth providers
 - **MFA** — TOTP (RFC 6238) with AES-256-GCM encrypted secrets; brute-force lockout
 - **Duress code** — secondary passphrase that creates a normal session but fires a silent `session.duress` alert
@@ -295,7 +295,7 @@ The tables below are a summary.
 - **did:web** resolution enforces RFC-1918 blocking and 5-second timeout (SSRF hardening)
 - **Webhook URLs** are validated at registration time; loopback/RFC-1918 targets are rejected
 - **Argon2id** (64 MB / 3 iterations / 4 threads) for all passphrase-based key derivation
-- **LDAP bridge** requires `ldaps://` — plaintext `ldap://` is refused at startup
+- **LDAP bridge** requires `ldaps://` — plaintext `ldap://` is refused at startup. It has no HTTP login route yet, so it is built with `-tags ldap` but cannot be used to sign in
 - **Duress passphrase** creates a normal-looking session while triggering a silent `session.duress` event
 - Extra-sensitive schemas (mental-health, addiction, criminal-record, etc.) require individual explicit grants
 - Consent revocations set `revokedAt` — records are never deleted (NZ Privacy Act 2020 audit trail)
