@@ -36,7 +36,7 @@ func columnsOf(t *testing.T, db *sql.DB, table string) map[string]bool {
 // requiredColumns are columns the server reads or writes, including ones older shapes lack.
 var requiredColumns = map[string][]string{
 	"webhook_subscriptions": {"signing_secret", "tenant_id"},
-	"oidc_clients":          {"jwks", "backchannel_logout_uri", "post_logout_redirect_uris"},
+	"oidc_clients":          {"jwks", "backchannel_logout_uri", "post_logout_redirect_uris", "first_party"},
 	"audit_log":             {"hash_version", "recorded_at"},
 	"recovery_configs":      {"guardian_emails"},
 	"recovery_requests":     {"commitment"},
@@ -191,4 +191,54 @@ func TestRunnerMigratesPlainFileDatabase(t *testing.T) {
 	}
 	_ = db.Close()
 	assertCurrentSchema(t, path)
+}
+
+// A database at version 4 (the schema before first-party clients) gains the column on its next open, and its
+// version record moves to the current version. The database is built by the store, then the version-5 change
+// is taken back out, which is what a version-4 database looks like.
+func TestVersionFourDatabaseGainsFirstParty(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "v4.db")
+	st, err := store.OpenSQLite(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = st.Close()
+
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`ALTER TABLE oidc_clients DROP COLUMN first_party`); err != nil {
+		t.Fatalf("drop first_party: %v", err)
+	}
+	if _, err := db.Exec(`DELETE FROM schema_migrations WHERE version = 5`); err != nil {
+		t.Fatal(err)
+	}
+	if columnsOf(t, db, "oidc_clients")["first_party"] {
+		t.Fatal("precondition: the column should be gone")
+	}
+	_ = db.Close()
+
+	st, err = store.OpenSQLite(path)
+	if err != nil {
+		t.Fatalf("open version 4 database: %v", err)
+	}
+	defer st.Close()
+	assertCurrentSchema(t, path)
+
+	ctx := context.Background()
+	if err := st.SaveClient(ctx, &store.OIDCClient{
+		ClientID: "first-party-1", ClientName: "fp", TokenEndpointAuthMethod: "none",
+		RedirectURIs: []string{"https://fp.example/cb"}, GrantTypes: []string{"authorization_code"},
+		FirstParty: true, CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := st.GetClient(ctx, "first-party-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.FirstParty {
+		t.Error("first-party flag did not round-trip")
+	}
 }

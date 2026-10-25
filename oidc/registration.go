@@ -39,6 +39,9 @@ type RegisterClientRequest struct {
 	PostLogoutRedirectURIs  []string `json:"post_logout_redirect_uris,omitempty"`
 	// JWKS is the client's public key set, required for private_key_jwt and refused otherwise.
 	JWKS json.RawMessage `json:"jwks,omitempty"`
+	// FirstParty marks a client the operator runs. Its users are not asked to consent. Only the operator-gated
+	// registration route can set it.
+	FirstParty bool `json:"first_party,omitempty"`
 }
 
 // clientJWK is one Ed25519 public key a client may sign its assertions with (RFC 8037 OKP).
@@ -243,6 +246,7 @@ func (p *Provider) RegisterClientHandler(w http.ResponseWriter, r *http.Request)
 		PostLogoutRedirectURIs:  req.PostLogoutRedirectURIs,
 		CreatedAt:               time.Now(),
 		JWKS:                    jwks,
+		FirstParty:              req.FirstParty,
 	}
 	if err := p.store.SaveClient(r.Context(), client); err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)

@@ -1,0 +1,2 @@
+-- 005: first-party clients. The column is added by the Go hook for version 5 (see migrate.go), which checks
+-- PRAGMA table_info first, so an existing database gets it once and a fresh one gets it on this run.

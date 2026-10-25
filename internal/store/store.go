@@ -271,8 +271,11 @@ type OIDCClient struct {
 	PostLogoutRedirectURIs []string `json:"postLogoutRedirectUris,omitempty"`
 	// JWKS is the client's public key set (RFC 7517 JSON) for private_key_jwt authentication. The keys are
 	// public, so they are not hidden. Empty for clients that do not use private_key_jwt.
-	JWKS      string    `json:"jwks,omitempty"`
-	CreatedAt time.Time `json:"createdAt"`
+	JWKS string `json:"jwks,omitempty"`
+	// FirstParty clients are operator-registered and skip the consent step. Other clients ask the user once
+	// per scope.
+	FirstParty bool      `json:"firstParty,omitempty"`
+	CreatedAt  time.Time `json:"createdAt"`
 }
 
 // RefreshToken stores a hashed refresh token for rotation.

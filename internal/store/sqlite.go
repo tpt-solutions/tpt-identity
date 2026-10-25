@@ -396,8 +396,8 @@ func (s *SQLStore) SaveClient(ctx context.Context, c *OIDCClient) error {
 	_, err := s.db.ExecContext(ctx, `
 		INSERT INTO oidc_clients
 		  (client_id, client_secret_hash, client_name, redirect_uris, token_endpoint_auth_method,
-		   grant_types, response_types, scope, tenant_id, backchannel_logout_uri, post_logout_redirect_uris, jwks, created_at)
-		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+		   grant_types, response_types, scope, tenant_id, backchannel_logout_uri, post_logout_redirect_uris, jwks, first_party, created_at)
+		VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 		ON CONFLICT(client_id) DO UPDATE SET
 			client_secret_hash=excluded.client_secret_hash,
 			client_name=excluded.client_name,
@@ -408,16 +408,17 @@ func (s *SQLStore) SaveClient(ctx context.Context, c *OIDCClient) error {
 			scope=excluded.scope,
 			backchannel_logout_uri=excluded.backchannel_logout_uri,
 			post_logout_redirect_uris=excluded.post_logout_redirect_uris,
-			jwks=excluded.jwks`,
+			jwks=excluded.jwks,
+			first_party=excluded.first_party`,
 		c.ClientID, c.ClientSecretHash, c.ClientName, string(redirectURIs),
 		c.TokenEndpointAuthMethod, string(grantTypes), string(responseTypes),
-		c.Scope, c.TenantID, c.BackchannelLogoutURI, string(postLogoutURIs), c.JWKS, c.CreatedAt)
+		c.Scope, c.TenantID, c.BackchannelLogoutURI, string(postLogoutURIs), c.JWKS, boolInt(c.FirstParty), c.CreatedAt)
 	return err
 }
 
 const clientSelectCols = `client_id, client_secret_hash, client_name, redirect_uris,
 	token_endpoint_auth_method, grant_types, response_types, scope, tenant_id,
-	COALESCE(backchannel_logout_uri,''), COALESCE(post_logout_redirect_uris,'[]'), COALESCE(jwks,''), created_at`
+	COALESCE(backchannel_logout_uri,''), COALESCE(post_logout_redirect_uris,'[]'), COALESCE(jwks,''), COALESCE(first_party,0), created_at`
 
 func (s *SQLStore) GetClient(ctx context.Context, clientID string) (*OIDCClient, error) {
 	row := s.db.QueryRowContext(ctx,
@@ -451,30 +452,34 @@ func (s *SQLStore) DeleteClient(ctx context.Context, clientID string) error {
 func (s *SQLStore) scanClient(row *sql.Row) (*OIDCClient, error) {
 	var c OIDCClient
 	var redirectURIs, grantTypes, responseTypes, postLogoutURIs string
+	var firstParty int
 	if err := row.Scan(&c.ClientID, &c.ClientSecretHash, &c.ClientName, &redirectURIs,
 		&c.TokenEndpointAuthMethod, &grantTypes, &responseTypes, &c.Scope, &c.TenantID,
-		&c.BackchannelLogoutURI, &postLogoutURIs, &c.JWKS, &c.CreatedAt); err != nil {
+		&c.BackchannelLogoutURI, &postLogoutURIs, &c.JWKS, &firstParty, &c.CreatedAt); err != nil {
 		return nil, fmt.Errorf("scan client: %w", err)
 	}
 	_ = unmarshalField(redirectURIs, &c.RedirectURIs)
 	_ = unmarshalField(grantTypes, &c.GrantTypes)
 	_ = unmarshalField(responseTypes, &c.ResponseTypes)
 	_ = unmarshalField(postLogoutURIs, &c.PostLogoutRedirectURIs)
+	c.FirstParty = firstParty == 1
 	return &c, nil
 }
 
 func (s *SQLStore) scanClientRow(rows *sql.Rows) (*OIDCClient, error) {
 	var c OIDCClient
 	var redirectURIs, grantTypes, responseTypes, postLogoutURIs string
+	var firstParty int
 	if err := rows.Scan(&c.ClientID, &c.ClientSecretHash, &c.ClientName, &redirectURIs,
 		&c.TokenEndpointAuthMethod, &grantTypes, &responseTypes, &c.Scope, &c.TenantID,
-		&c.BackchannelLogoutURI, &postLogoutURIs, &c.JWKS, &c.CreatedAt); err != nil {
+		&c.BackchannelLogoutURI, &postLogoutURIs, &c.JWKS, &firstParty, &c.CreatedAt); err != nil {
 		return nil, err
 	}
 	_ = unmarshalField(redirectURIs, &c.RedirectURIs)
 	_ = unmarshalField(grantTypes, &c.GrantTypes)
 	_ = unmarshalField(responseTypes, &c.ResponseTypes)
 	_ = unmarshalField(postLogoutURIs, &c.PostLogoutRedirectURIs)
+	c.FirstParty = firstParty == 1
 	return &c, nil
 }
 
@@ -1458,4 +1463,12 @@ func (s *SQLStore) MarkCredentialOfferUsed(ctx context.Context, id string) error
 		return ErrOfferUsed
 	}
 	return nil
+}
+
+// boolInt stores a flag as 0 or 1, the form both databases bind and scan.
+func boolInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }

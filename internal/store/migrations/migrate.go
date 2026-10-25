@@ -144,6 +144,7 @@ func appliedVersions(db *sql.DB) (map[int]bool, error) {
 // express idempotently (SQLite has no ADD COLUMN IF NOT EXISTS).
 var hooks = map[int]func(tx *sql.Tx) error{
 	4: addMissingColumns,
+	5: func(tx *sql.Tx) error { return addColumns(tx, firstPartyColumns) },
 }
 
 // columnAdd is one column an older table shape may lack.
@@ -171,8 +172,19 @@ var reconcileColumns = []columnAdd{
 }
 
 // addMissingColumns adds each reconcileColumns entry that its table lacks. Existing columns are left alone.
+// firstPartyColumns are the columns migration 005 adds.
+var firstPartyColumns = []columnAdd{
+	{"oidc_clients", "first_party", "INTEGER NOT NULL DEFAULT 0"},
+}
+
+// addMissingColumns applies the reconcileColumns list (version 4).
 func addMissingColumns(tx *sql.Tx) error {
-	for _, c := range reconcileColumns {
+	return addColumns(tx, reconcileColumns)
+}
+
+// addColumns adds each listed column its table lacks.
+func addColumns(tx *sql.Tx, list []columnAdd) error {
+	for _, c := range list {
 		has, err := hasColumn(tx, c.table, c.column)
 		if err != nil {
 			return err

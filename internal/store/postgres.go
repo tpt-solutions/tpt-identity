@@ -150,7 +150,8 @@ CREATE TABLE IF NOT EXISTS oidc_clients (
 	created_at TIMESTAMPTZ NOT NULL,
 	backchannel_logout_uri TEXT,
 	post_logout_redirect_uris JSON,
-	jwks TEXT NOT NULL DEFAULT ''
+	jwks TEXT NOT NULL DEFAULT '',
+	first_party INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS refresh_tokens (
