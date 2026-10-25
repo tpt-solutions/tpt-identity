@@ -51,6 +51,7 @@ tags:
   - name: Ops
   - name: DIDComm
   - name: Spec
+  - name: Login
 security: []
 components:
   securitySchemes:
@@ -3025,6 +3026,128 @@ paths:
           $ref: "#/components/responses/TooManyRequests"
 
   # ── Admin ────────────────────────────────────────────────────────────────
+  /login:
+    get:
+      tags: [Login]
+      operationId: loginPage
+      summary: Sign-in page for a validated authorize request (HTML)
+      description: Reached by redirect from /authorize when the browser has no session. The transaction must match the browser's login binding cookie.
+      parameters:
+        - name: txn
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "200":
+          description: The sign-in page.
+          content:
+            text/html:
+              schema: {type: string}
+        "400":
+          description: The transaction has expired or was started by another browser (HTML error page).
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /login/magic:
+    post:
+      tags: [Login]
+      operationId: loginMagicLink
+      summary: Email a single-use sign-in link for a login transaction (HTML)
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              properties:
+                txn: {type: string}
+                csrf: {type: string}
+                email: {type: string, format: email}
+      responses:
+        "200":
+          description: Check-your-email page. The same for every address.
+          content:
+            text/html:
+              schema: {type: string}
+        "400":
+          description: Bad transaction, or a malformed address (HTML).
+        "403":
+          description: The CSRF token does not match (HTML).
+        "503":
+          description: Email could not be sent (HTML).
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /login/passkey/finish:
+    post:
+      tags: [Login]
+      operationId: loginPasskeyFinish
+      summary: Complete a passkey sign-in for a login transaction
+      description: Needs the X-CSRF-Token header and the browser's binding cookie. Returns the relying party redirect to follow.
+      parameters:
+        - name: txn
+          in: query
+          required: true
+          schema: {type: string}
+        - name: X-CSRF-Token
+          in: header
+          required: true
+          schema: {type: string}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/JSONObject"
+      responses:
+        "200":
+          description: "{redirect} to follow, or {message} for a device approval."
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JSONObject"
+        "400":
+          description: Bad transaction.
+        "401":
+          description: The assertion did not prove a subject.
+        "403":
+          description: The CSRF header does not match.
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
+  /login/static/{name}:
+    get:
+      tags: [Login]
+      operationId: loginStaticAsset
+      summary: The login page's script and stylesheet
+      parameters:
+        - name: name
+          in: path
+          required: true
+          schema: {type: string, enum: [login.js, login.css]}
+      responses:
+        "200":
+          description: The asset.
+        "404":
+          $ref: "#/components/responses/NotFound"
+  /device/start:
+    get:
+      tags: [Login]
+      operationId: deviceStart
+      summary: Open a browser sign-in that approves a device request
+      parameters:
+        - name: user_code
+          in: query
+          required: true
+          schema: {type: string}
+      responses:
+        "302":
+          description: Redirect to the sign-in page.
+        "400":
+          description: No code given (HTML).
+        "404":
+          description: Code not found or expired (HTML).
+        "409":
+          description: Already answered (HTML).
+        "429":
+          $ref: "#/components/responses/TooManyRequests"
   /admin/v1/didcomm/inbox:
     get:
       tags: [Admin]

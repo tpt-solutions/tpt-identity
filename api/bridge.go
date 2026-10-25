@@ -18,7 +18,6 @@ import (
 	"github.com/tpt-solutions/tpt-identity/internal/authn"
 	"github.com/tpt-solutions/tpt-identity/internal/bridge"
 	bridgeproviders "github.com/tpt-solutions/tpt-identity/internal/bridge/providers"
-	"github.com/tpt-solutions/tpt-identity/oidc"
 	"github.com/tpt-solutions/tpt-identity/pkg/vc"
 )
 
@@ -37,6 +36,7 @@ type bridgeState struct {
 	LinkFor             string `json:"link_for,omitempty"`         // non-empty = link to existing DID
 	AuthnRequestID      string `json:"authn_request_id,omitempty"` // SAML: anti-replay
 	Binding             string `json:"binding,omitempty"`          // must match the browser cookie on callback
+	DeviceUserCode      string `json:"device_user_code,omitempty"` // non-empty = approve this device request
 	CreatedAt           int64  `json:"created_at"`
 }
 
@@ -403,11 +403,14 @@ func (s *Server) finishPasswordLogin(w http.ResponseWriter, r *http.Request, req
 // ─── Magic Link bridge ───────────────────────────────────────────────────────
 
 type magicLinkRequest struct {
-	Email       string `json:"email"`
-	ClientID    string `json:"client_id"`
-	RedirectURI string `json:"redirect_uri"`
-	Scope       string `json:"scope"`
-	Nonce       string `json:"nonce"`
+	Email               string `json:"email"`
+	ClientID            string `json:"client_id"`
+	RedirectURI         string `json:"redirect_uri"`
+	Scope               string `json:"scope"`
+	Nonce               string `json:"nonce"`
+	State               string `json:"state"`
+	CodeChallenge       string `json:"code_challenge"`
+	CodeChallengeMethod string `json:"code_challenge_method"`
 }
 
 // MagicLinkSender delivers a magic-link URL to the account holder (typically by email).
@@ -434,28 +437,36 @@ func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ml := bridgeproviders.NewMagicLink(s.store)
-	rawToken, expiresAt, err := ml.GenerateToken(r.Context(), req.Email)
-	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	verifyURL := s.issuer + "/auth/magiclink/verify?token=" + url.QueryEscape(rawToken)
+	// A sign-in with an OIDC request must name a registered client and redirect, and carry PKCE. Without the
+	// challenge the link could not complete the sign-in, so it is refused here rather than at the link.
+	stateToken := ""
 	if req.ClientID != "" {
-		st := bridgeState{
-			ClientID:    req.ClientID,
-			RedirectURI: req.RedirectURI,
-			Scope:       req.Scope,
-			Nonce:       req.Nonce,
-			CreatedAt:   time.Now().Unix(),
+		if err := s.checkClientRedirect(r.Context(), req.ClientID, req.RedirectURI); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
 		}
-		if stateToken, err := s.signBridgeState(st); err == nil {
-			verifyURL = oidc.AppendQuery(verifyURL, map[string]string{"state": stateToken})
+		if req.CodeChallenge == "" || req.CodeChallengeMethod != "S256" {
+			http.Error(w, "PKCE (S256) is required", http.StatusBadRequest)
+			return
 		}
+		token, err := s.signBridgeState(bridgeState{
+			ClientID:            req.ClientID,
+			RedirectURI:         req.RedirectURI,
+			Scope:               req.Scope,
+			Nonce:               req.Nonce,
+			OrigState:           req.State,
+			CodeChallenge:       req.CodeChallenge,
+			CodeChallengeMethod: req.CodeChallengeMethod,
+			CreatedAt:           time.Now().Unix(),
+		})
+		if err != nil {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		stateToken = token
 	}
 
-	if err := s.magicLinks.SendMagicLink(r.Context(), req.Email, verifyURL, expiresAt); err != nil {
+	if err := s.deliverMagicLink(r.Context(), req.Email, stateToken); err != nil {
 		s.logger.Error("magic link delivery failed", "error", err)
 		http.Error(w, "delivery failed", http.StatusServiceUnavailable)
 		return
@@ -464,7 +475,7 @@ func (s *Server) handleMagicLinkRequest(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"expires_at": expiresAt.UTC().Format(time.RFC3339),
+		"expires_at": time.Now().Add(15 * time.Minute).UTC().Format(time.RFC3339),
 	})
 }
 
@@ -485,12 +496,16 @@ func (s *Server) handleMagicLinkVerify(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var st *bridgeState
+	// A link that names a sign-in must still match it. An expired or forged state is refused, not dropped:
+	// dropping it would finish the login without the relying party's code.
+	st := &bridgeState{}
 	if rawState != "" {
-		st, _ = s.verifyBridgeState(rawState)
-	}
-	if st == nil {
-		st = &bridgeState{}
+		parsed, err := s.verifyBridgeState(rawState)
+		if err != nil {
+			http.Error(w, "This sign-in link is no longer valid. Start the sign-in again.", http.StatusBadRequest)
+			return
+		}
+		st = parsed
 	}
 	s.finishBridgeAuth(w, r, ext, st, []string{"email"})
 }
@@ -640,28 +655,19 @@ func (s *Server) finishBridgeAuth(w http.ResponseWriter, r *http.Request, ext *b
 		})
 	}
 
-	// If OIDC flow params are present, issue an authorization code and redirect.
-	if st.ClientID != "" && st.RedirectURI != "" {
-		// Only registered clients and redirect URIs may receive a code, and PKCE is mandatory.
-		if err := s.checkClientRedirect(r.Context(), st.ClientID, st.RedirectURI); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-		if st.CodeChallenge == "" || st.CodeChallengeMethod != "S256" {
-			http.Error(w, "PKCE (S256) is required", http.StatusBadRequest)
-			return
-		}
-		authCode, err := s.oidc.IssueSessionForDIDCtx(r, subjectDID, st.ClientID, st.RedirectURI, st.Scope, st.Nonce, st.CodeChallenge, st.CodeChallengeMethod, amr)
-		if err != nil {
-			http.Error(w, "session error: "+err.Error(), http.StatusInternalServerError)
-			return
-		}
-		params := map[string]string{"code": authCode}
-		if st.OrigState != "" {
-			params["state"] = st.OrigState
-		}
-		redirect := oidc.AppendQuery(st.RedirectURI, params)
-		http.Redirect(w, r, redirect, http.StatusFound) //nolint:gosec // G710: redirect validated by checkClientRedirect above
+	// A device sign-in approves the device, and an OIDC sign-in returns the relying party redirect with a code.
+	// Both go through loginNext, which checks the client, redirect URI and PKCE before issuing anything.
+	redirect, device, err := s.loginNext(r, subjectDID, st, amr)
+	if err != nil {
+		http.Error(w, err.Error(), loginStatus(err))
+		return
+	}
+	if device {
+		renderLogin(w, http.StatusOK, loginView{Done: true, Heading: "Device approved", Message: "You can return to your device."})
+		return
+	}
+	if redirect != "" {
+		http.Redirect(w, r, redirect, http.StatusFound) //nolint:gosec // G710: redirect validated by checkClientRedirect in codeRedirect
 		return
 	}
 

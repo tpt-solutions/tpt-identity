@@ -207,55 +207,10 @@ func (s *Server) handleWebAuthnLoginFinish(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	cookie, err := r.Cookie("wa_auth_session")
-	if err != nil {
-		http.Error(w, "login session not found — call begin first", http.StatusBadRequest)
+	subjectDID, ok := s.webAuthnLoginSubject(w, r)
+	if !ok {
 		return
 	}
-	raw, ok := s.waAuthSessions.LoadAndDelete(cookie.Value)
-	if !ok || time.Now().After(raw.(*waSessionEntry).expiresAt) {
-		http.Error(w, "login session expired", http.StatusUnauthorized)
-		return
-	}
-	entry := raw.(*waSessionEntry)
-
-	handler := func(rawID, userHandle []byte) (gowebauthn.User, error) {
-		subjectDID := string(userHandle)
-		creds, err := s.store.ListWebAuthnCredentials(r.Context(), subjectDID)
-		if err != nil {
-			return nil, err
-		}
-		return &waUser{subjectDID: subjectDID, creds: creds}, nil
-	}
-
-	user, credential, err := s.webAuthn.FinishPasskeyLogin(handler, entry.session, r)
-	if err != nil {
-		http.Error(w, "login failed: "+err.Error(), http.StatusUnauthorized)
-		return
-	}
-
-	// A sign counter that went backwards means the authenticator may be a clone. Refuse the login
-	// rather than start a session for a possibly stolen key.
-	if credential.Authenticator.CloneWarning {
-		s.logger.Warn("webauthn: possible cloned authenticator; login refused", "ip", s.clientIP(r))
-		http.Error(w, "authenticator may be cloned; login refused", http.StatusUnauthorized)
-		return
-	}
-
-	// Update the sign count and last-used timestamp for theft detection.
-	credIDStr := base64.RawURLEncoding.EncodeToString(credential.ID)
-	if existing, storeErr := s.store.GetWebAuthnCredential(r.Context(), credIDStr); storeErr == nil && existing != nil {
-		existing.SignCount = credential.Authenticator.SignCount
-		now := time.Now()
-		existing.LastUsedAt = &now
-		_ = s.store.UpdateWebAuthnCredential(r.Context(), existing)
-	}
-
-	subjectDID := user.(*waUser).subjectDID
-	s.events.Publish(r.Context(), "session.created", map[string]string{
-		"subject_did": subjectDID,
-		"method":      "webauthn",
-	})
 
 	// The passkey proves the user, so the session is a real bearer token, like one from /token.
 	accessToken, ttl, err := s.oidc.MintAccessToken(subjectDID, s.issuer)
@@ -438,4 +393,65 @@ func waCookie(name, value string, maxAge int) *http.Cookie {
 		MaxAge:   maxAge,
 		Path:     "/",
 	}
+}
+
+// webAuthnLoginSubject checks a passkey assertion against the pending login session and returns the subject it
+// proves. It writes the error response itself and returns ok false when the assertion does not prove a subject.
+// It does not start a session, so a caller decides what the proof is for.
+func (s *Server) webAuthnLoginSubject(w http.ResponseWriter, r *http.Request) (string, bool) {
+	if s.webAuthn == nil {
+		http.Error(w, "webauthn not configured", http.StatusNotImplemented)
+		return "", false
+	}
+	cookie, err := r.Cookie("wa_auth_session")
+	if err != nil {
+		http.Error(w, "login session not found — call begin first", http.StatusBadRequest)
+		return "", false
+	}
+	raw, ok := s.waAuthSessions.LoadAndDelete(cookie.Value)
+	if !ok || time.Now().After(raw.(*waSessionEntry).expiresAt) {
+		http.Error(w, "login session expired", http.StatusUnauthorized)
+		return "", false
+	}
+	entry := raw.(*waSessionEntry)
+
+	handler := func(rawID, userHandle []byte) (gowebauthn.User, error) {
+		subjectDID := string(userHandle)
+		creds, err := s.store.ListWebAuthnCredentials(r.Context(), subjectDID)
+		if err != nil {
+			return nil, err
+		}
+		return &waUser{subjectDID: subjectDID, creds: creds}, nil
+	}
+
+	user, credential, err := s.webAuthn.FinishPasskeyLogin(handler, entry.session, r)
+	if err != nil {
+		http.Error(w, "login failed: "+err.Error(), http.StatusUnauthorized)
+		return "", false
+	}
+
+	// A sign counter that went backwards means the authenticator may be a clone. Refuse the login
+	// rather than start a session for a possibly stolen key.
+	if credential.Authenticator.CloneWarning {
+		s.logger.Warn("webauthn: possible cloned authenticator; login refused", "ip", s.clientIP(r))
+		http.Error(w, "authenticator may be cloned; login refused", http.StatusUnauthorized)
+		return "", false
+	}
+
+	// Update the sign count and last-used timestamp for theft detection.
+	credIDStr := base64.RawURLEncoding.EncodeToString(credential.ID)
+	if existing, storeErr := s.store.GetWebAuthnCredential(r.Context(), credIDStr); storeErr == nil && existing != nil {
+		existing.SignCount = credential.Authenticator.SignCount
+		now := time.Now()
+		existing.LastUsedAt = &now
+		_ = s.store.UpdateWebAuthnCredential(r.Context(), existing)
+	}
+
+	subjectDID := user.(*waUser).subjectDID
+	s.events.Publish(r.Context(), "session.created", map[string]string{
+		"subject_did": subjectDID,
+		"method":      "webauthn",
+	})
+
+	return subjectDID, true
 }

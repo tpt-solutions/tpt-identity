@@ -357,13 +357,28 @@ func TestMySessionsRequiresBearer(t *testing.T) {
 
 // ---- /authorize subject binding ----
 
-// A client-supplied X-Subject-DID header must never establish the end-user's identity.
+// A client-supplied X-Subject-DID header must never establish the end-user's identity. A request with a
+// registered client and valid PKCE is sent to the login page, and no authorization code is issued.
 func TestAuthorizeRejectsForgedSubjectHeader(t *testing.T) {
 	srv := newTestServer(t)
-	q := "/authorize?client_id=c1&redirect_uri=https%3A%2F%2Frp.example%2Fcb&state=s&code_challenge=x&code_challenge_method=S256"
+	reg := authed(t, srv, http.MethodPost, "/oidc/register",
+		`{"client_name":"rp","redirect_uris":["https://rp.example/cb"],"token_endpoint_auth_method":"none","grant_types":["authorization_code"]}`)
+	var client struct {
+		ClientID string `json:"client_id"`
+	}
+	if err := json.Unmarshal(reg.Body.Bytes(), &client); err != nil || client.ClientID == "" {
+		t.Fatalf("register client: %d %s", reg.Code, reg.Body.String())
+	}
+	q := "/authorize?client_id=" + client.ClientID +
+		"&redirect_uri=https%3A%2F%2Frp.example%2Fcb&state=s&nonce=n&scope=openid" +
+		"&code_challenge=E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM&code_challenge_method=S256"
 	w := do(t, srv, http.MethodGet, q, "", map[string]string{"X-Subject-DID": "did:peer:victim"})
-	if w.Code != http.StatusUnauthorized {
-		t.Errorf("want 401 for forged X-Subject-DID, got %d", w.Code)
+	loc := w.Header().Get("Location")
+	if w.Code != http.StatusFound || !strings.HasPrefix(loc, testIssuer+"/login?txn=") {
+		t.Fatalf("forged header: want a redirect to the login page, got %d %q", w.Code, loc)
+	}
+	if strings.Contains(loc, "code=") {
+		t.Error("an authorization code was issued for a forged subject header")
 	}
 }
 

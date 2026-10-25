@@ -317,6 +317,11 @@ func NewServer(cfg Config) *Server {
 		})
 	}
 
+	// A browser /authorize request with no session goes to the login page (see login.go).
+	if s.oidc != nil {
+		s.oidc.SetLoginRedirect(s.startLogin)
+	}
+
 	s.routes()
 	return s
 }
@@ -368,6 +373,12 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("POST /device_authorization", s.wrap(s.rateLimit(s.audit(s.oidc.DeviceAuthorizationHandler))))
 	s.mux.HandleFunc("GET /device", s.wrap(s.rateLimit(s.audit(s.oidc.DeviceVerifyHandler))))
 	s.mux.HandleFunc("POST /device/approve", s.wrap(s.rateLimit(s.audit(s.oidc.DeviceApproveHandler))))
+	// Browser sign-in: the login page, its methods and its assets, and the device approval page (login.go).
+	s.mux.HandleFunc("GET /device/start", s.wrap(s.rateLimit(s.audit(s.handleDeviceStart))))
+	s.mux.HandleFunc("GET /login", s.wrap(s.rateLimit(s.audit(s.handleLoginPage))))
+	s.mux.HandleFunc("POST /login/magic", s.wrap(s.rateLimit(s.audit(s.handleLoginMagic))))
+	s.mux.HandleFunc("POST /login/passkey/finish", s.wrap(s.rateLimit(s.audit(s.handleLoginPasskeyFinish))))
+	s.mux.HandleFunc("GET /login/static/{name}", s.wrap(s.audit(s.handleLoginAsset)))
 	// OID4VCI
 	s.mux.HandleFunc("POST /oid4vci/offers", s.wrap(s.rateLimit(s.audit(s.auth(scopeOID4VCI, s.oidc.CreateCredentialOfferHandler(s.signingKey, s.signingKeyID, s.store))))))
 	s.mux.HandleFunc("POST /oid4vci/credential", s.wrap(s.rateLimit(s.audit(s.oidc.CredentialHandler(s.signingKey, s.signingKeyID, s.store)))))
