@@ -50,6 +50,8 @@ type Provider struct {
 	devicePolls sync.Map
 	// previousKeys are retired signing keys kept for verification (see AddPreviousKey).
 	previousKeys []verificationKey
+	// loginRedirect, when set, receives an authorize request that has passed validation but has no session.
+	loginRedirect func(w http.ResponseWriter, r *http.Request, params map[string]string)
 	// cNonces holds issued OID4VCI c_nonce values (nonce → expiry); each is single use.
 	cNonces sync.Map
 	// holderKeys resolves a holder DID to its published keys for OID4VCI proof checks.
@@ -121,16 +123,6 @@ func (p *Provider) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "missing required parameters", http.StatusBadRequest)
 		return
 	}
-	// The end-user must already hold a valid, signed access token. The subject is
-	// taken from that token, never from a client-supplied header.
-	subjectDID, err := p.SubjectFromBearer(r.Header.Get("Authorization"))
-	if err != nil {
-		w.Header().Set("WWW-Authenticate", `Bearer realm="tpt-identity"`)
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "login_required", "error_description": "authenticated session required"})
-		return
-	}
 	// state is required to prevent CSRF.
 	if state == "" {
 		writeError(w, "invalid_request", "state parameter is required")
@@ -154,6 +146,30 @@ func (p *Provider) AuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	if !containsURI(client.RedirectURIs, redirectURI) {
 		writeError(w, "invalid_request", "redirect_uri not registered for this client")
+		return
+	}
+
+	// The end-user must hold a valid, signed access token, and the subject comes from that token, never
+	// from a client-supplied header. A browser with no token is sent to the login page instead. Only a
+	// request that has passed every check above reaches the login page.
+	subjectDID, err := p.SubjectFromBearer(r.Header.Get("Authorization"))
+	if err != nil {
+		if p.loginRedirect != nil {
+			p.loginRedirect(w, r, map[string]string{
+				"client_id":             clientID,
+				"redirect_uri":          redirectURI,
+				"scope":                 scope,
+				"nonce":                 nonce,
+				"state":                 state,
+				"code_challenge":        codeChallenge,
+				"code_challenge_method": codeChallengeMethod,
+			})
+			return
+		}
+		w.Header().Set("WWW-Authenticate", `Bearer realm="tpt-identity"`)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "login_required", "error_description": "authenticated session required"})
 		return
 	}
 
@@ -623,4 +639,11 @@ func randomHex(n int) (string, error) {
 func randomID() string {
 	s, _ := randomHex(16)
 	return fmt.Sprintf("sess_%s", s)
+}
+
+// SetLoginRedirect sets what /authorize does for a validated request from a browser with no session. The
+// hook is given the checked parameters and is expected to send the browser to a login page. Without a hook,
+// such a request is refused with 401.
+func (p *Provider) SetLoginRedirect(fn func(w http.ResponseWriter, r *http.Request, params map[string]string)) {
+	p.loginRedirect = fn
 }

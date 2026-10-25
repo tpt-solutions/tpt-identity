@@ -1,8 +1,10 @@
 package oidc
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -81,7 +83,7 @@ func (p *Provider) DeviceVerifyHandler(w http.ResponseWriter, r *http.Request) {
 	if userCode == "" {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(map[string]string{
-			"prompt": "Enter the user_code shown on your device at this URL, then POST to /device/approve.",
+			"prompt": "To approve a device in a browser, open /device/start?user_code=CODE, where CODE is the user_code shown on your device. Programmatic clients POST {user_code} to /device/approve with a bearer token.",
 		})
 		return
 	}
@@ -118,18 +120,11 @@ func (p *Provider) DeviceApproveHandler(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	dc, err := p.store.GetDeviceCodeByUserCode(r.Context(), userCode)
-	if err != nil || time.Now().After(dc.ExpiresAt) {
-		writeError(w, "invalid_request", "user_code not found or expired")
-		return
-	}
-	if dc.Approved || dc.Denied {
-		writeError(w, "invalid_request", "device request already decided")
-		return
-	}
-	dc.SubjectDID = subjectDID
-	dc.Approved = true
-	if err := p.store.UpdateDeviceCode(r.Context(), dc); err != nil {
+	if err := p.ApproveDeviceCode(r.Context(), userCode, subjectDID); err != nil {
+		if errors.Is(err, ErrDeviceCodeDecided) || errors.Is(err, ErrDeviceCodeUnknown) {
+			writeError(w, "invalid_request", err.Error())
+			return
+		}
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
@@ -230,4 +225,25 @@ func generateUserCode() string {
 		b[i] = chars[int(b[i])%len(chars)]
 	}
 	return string(b[:4]) + "-" + string(b[4:])
+}
+
+// ErrDeviceCodeDecided and ErrDeviceCodeUnknown are returned by ApproveDeviceCode.
+var (
+	ErrDeviceCodeDecided = errors.New("device request already decided")
+	ErrDeviceCodeUnknown = errors.New("user_code not found or expired")
+)
+
+// ApproveDeviceCode records that subjectDID approved the device request with this user code. The caller must
+// have authenticated subjectDID already. The device's next token poll then issues tokens for it.
+func (p *Provider) ApproveDeviceCode(ctx context.Context, userCode, subjectDID string) error {
+	dc, err := p.store.GetDeviceCodeByUserCode(ctx, strings.ToUpper(userCode))
+	if err != nil || time.Now().After(dc.ExpiresAt) {
+		return ErrDeviceCodeUnknown
+	}
+	if dc.Approved || dc.Denied {
+		return ErrDeviceCodeDecided
+	}
+	dc.SubjectDID = subjectDID
+	dc.Approved = true
+	return p.store.UpdateDeviceCode(ctx, dc)
 }
