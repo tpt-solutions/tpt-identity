@@ -6,6 +6,9 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 
+- A hosted sign-in page at `/login`, on the issuer origin, served from the binary. A browser with no session that calls `/authorize` is sent there with a validated request. The page offers magic link and passkey (password is not offered). Its transaction is bound to the browser that started it, and every form step checks a CSRF token. Its Content Security Policy forbids inline script and framing.
+- Device approval in a browser: `GET /device/start?user_code=` signs the user in on the login page and approves the device.
+
 - PostgreSQL store: set `db_path` to a `postgres://` URL. The same query code runs on SQLite and PostgreSQL; the PostgreSQL schema is created on start, and the transactions that read a row and then write it take advisory locks so concurrent requests cannot fork the audit chain or lose auth-failure counts. The store contract tests run on both when `TPT_TEST_POSTGRES_DSN` is set, and CI runs them against a PostgreSQL service.
 - `tpt-identity doctor` checks the config, the database (including that a PostgreSQL server answers), the DIDComm key file and the listen address.
 - GitHub Actions CI: build, vet, race-enabled tests, and golangci-lint on every push to `master` and every pull request.
@@ -29,12 +32,17 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Changed
 
+- `/authorize` checks the client, redirect URI, state and PKCE before it looks for a session. A browser with no session is sent to the login page; an API client with no session still gets 401.
+- `POST /auth/magiclink/request` with a `client_id` requires PKCE and a registered redirect URI, and the sign-in link carries the challenge. Before this change such a sign-in could not complete.
+
 - **Breaking:** authcrypt DIDComm envelopes bind the content tag into the key derivation (ECDH-1PU `SuppPrivInfo`). Envelopes produced before this change no longer unpack. Anoncrypt envelopes are unchanged.
 - The PAR front-channel call must name the client that pushed the request. Without a matching `client_id` it is refused.
 - Identities hosted here resolve from the store, uncached, so updates show at once.
 - SQLite schema: the server builds its schema from the embedded migrations, not inline. Migration 004 is the complete schema. Existing databases upgrade on the next start, and `tpt-identity migrate up` applies the same migrations. `/readyz` reports degraded when the schema version is behind this build. PostgreSQL still builds its schema inline and keeps no version record.
 
 ### Security
+
+- A magic-link sign-in whose state was expired or forged finished without the relying party's code. It is now refused.
 
 - A caller could supply `iss`, `sub`, `exp` or other issuer-owned claims as always-visible SD-JWT claims, and the platform signed them. Those claims are now refused.
 - A PAR `request_uri` could be burned by a client other than the one that pushed it. The check now runs before the request is consumed.

@@ -203,6 +203,7 @@ TTL is **15 minutes** (hardcoded in `internal/bridge/providers/magiclink.go`). T
 - **Deactivation is permanent** — `identity.role = "deactivated"` cannot be suspended or unsuspended, and the DID resolves with no keys (`api/deactivate.go`).
 - **`private_key_jwt` assertions use the seen-message table** — the jti is recorded in `didcomm_seen` under sender `client_assertion:<client_id>`.
 - **SD-JWT payload claims are issuer-owned** — `iss`, `sub`, `iat`, `exp`, `nbf`, `_sd`, `_sd_alg`, `vct`, `jti` and `status` cannot be set by the caller (`pkg/vc/sdjwt.go`, `issuerOwnedClaims`).
+- **The login page is the only browser sign-in** — `/authorize` redirects a session-less browser to `/login` only after the request passes every check (client, redirect URI, state, PKCE). The login transaction is the signed bridge state, bound to the starting browser by `tpt_login_binding`. Form steps need the `tpt_login_csrf` token; the passkey step also needs the `X-CSRF-Token` header. The magic link is not bound to the browser (it is opened on other devices), so PKCE is what protects that code. Pages are served with a CSP that forbids inline script and framing (`api/login.go`).
 - **The DIDComm inbox is not an action queue** — messages are kept only when their type is in `didcomm.accepted_types`. Nothing consumes them automatically.
 - **`ValidFor < 0` in `vc.Issue` / `IssueReputationVC`** — negative values set an already-expired `ValidUntil` (useful for tests). Zero means no expiry. Both `vc.Issue` and `trust.IssueReputationVC` handle this identically.
 

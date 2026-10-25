@@ -222,7 +222,7 @@ Source: platform review. Reproduce each item before fixing. Several `[x]` items 
 - [ ] README "5-minute demo" (issue + verify via curl); fix wrong WebAuthn paths; document OID4VC/VP, device, PAR, DIDComm, admin, privacy routes; add CI badge
 - [ ] `examples/`: RP app — done for Go: `examples/rp-go` runs the PKCE flow, private_key_jwt, ID token and userinfo checks, with integration tests against a live in-process platform. Still open: the Node variant, the hosted login page the RP needs to avoid taking passwords, the age-over-18 SD-JWT verifier, webhook receiver, custom-schema registration (`Source: community`, v1→v2), extra-sensitive consent demo
 - [ ] Issuer starter profiles: university (education.*), clinic/pharmacy (healthcare.*), bank KYC (finance.* + identity.*), employer (professional.employment)
-- [ ] Embedded minimal HTML pages (login, consent, device approval, wallet/admin) via `embed`
+- [ ] Embedded minimal HTML pages (login, consent, device approval, wallet/admin) via `embed` — the login page and the device approval page are done, served from this binary on the issuer origin (`api/login.go`, `api/loginweb/`, `api/login_test.go`). Methods: magic link and passkey; password is not offered on the page. Still open: the consent and wallet/admin pages
 - [x] OpenAPI spec (`api/openapi.yaml`, served at `/openapi.yaml`, route-drift test)
 - [ ] Postman/Bruno collection; generated TS + Go client SDKs
 - [ ] CLI: `schemas list|show|validate|scaffold`, client registration command, `--output json|yaml`, shell completion docs — `schemas list` and `schemas show` are done; validate, scaffold, client registration, `--output` and completion docs are still open
